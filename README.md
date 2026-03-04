@@ -1,12 +1,11 @@
 # 📋 Setup Planner Sync - Gerenciador de Projetos com Google Sheets
 
-<img width="1325" height="898" alt="image" src="https://github.com/user-attachments/assets/9ec84a9f-45c2-44b5-88ee-ee49a711c877" />
+Ultimate Planner Pro, uma interface digital avançada desenvolvida para a gestão estratégica de projetos e controle financeiro pessoal. A plataforma utiliza inteligência artificial para automatizar a criação de cronogramas e sugerir orçamentos baseados em custos médios de mercado. Através de recursos de análise de dados, o sistema permite monitorar o progresso geral, fluxos de caixa e a eficiência de gastos por categoria. Os usuários podem realizar o gerenciamento de saldo em tempo real, registrando aportes, retiradas e sincronizando informações via Google Apps Script. O painel oferece ainda ferramentas para configuração de itens, checklists detalhados e um histórico completo de movimentações financeiras para garantir total transparência operacional.
+
+#
+<img width="1325" height="898" alt="image" src="https://github.com/user-attachments/assets/9ec84a9f-45c2-44b5-88ee-ee49a711c877"/>
 
 </br>
-
-Bem-vindo ao **Setup Planner Sync**, uma aplicação web interativa para gerenciar projetos e itens de compra (setup gamer, escritório, lifestyle, etc.) com sincronização automática entre **LocalStorage** e **Google Sheets via Google Apps Script**.
-
-Este projeto foi desenvolvido com foco em organização, persistência de dados e facilidade de uso, permitindo que o usuário mantenha seu planejamento salvo localmente e na nuvem, com histórico de conexões.
 
 ---
 
