@@ -467,6 +467,17 @@
         </div>
     </div>
 
+    <div id="modal-user" class="modal">
+        <div class="bg-white p-8 rounded-2xl">
+            <h3 class="font-black">Adicionar participante</h3>
+            <input id="u-name" placeholder="Nome">
+            <input id="u-emoji" placeholder="Emoji">
+            <input id="u-color" placeholder="bg-teal-500">
+            <button onclick="addUser()">Salvar</button>
+        </div>
+    </div>
+
+
     <script>
         const SCRIPT_URL_KEY = 'planner_script_url';
         const STORAGE_KEY = 'ultimate_planner_v7_final';
@@ -514,32 +525,50 @@
                 items: DEFAULT_ITEMS.map(item => ({
                     id: item.id,
                     name: item.name,
-                    category: item.phase,  
-                    desc: item.spec,       
-                    value: item.max,        
+                    category: item.phase,
+                    desc: item.spec,
+                    value: item.max,
                     done: item.done
-                }))
+                })),
+                participants: [
+                    { id: 1, name: "Você", emoji: "😎", color: "bg-indigo-500", active: true }
+                ]
             };
 
             state.projects.push(project);
             save();
         }
 
-        function init() {
+        function addUser() {
+            const p = state.projects.find(x => x.id === state.currentProjectId);
+
+            p.participants.push({
+                id: Date.now(),
+                name: uName.value,
+                emoji: uEmoji.value,
+                color: uColor.value,
+                active: true
+            });
+
+            save();
+        }
+
+        async function init() {
             const scriptUrl = localStorage.getItem(SCRIPT_URL_KEY);
 
             if (!scriptUrl) {
                 document.getElementById('connect-screen').style.display = "flex";
                 document.getElementById('main-header').style.display = "none";
-                loadHistory()
+                loadHistory();
                 return;
             }
 
             document.getElementById('connect-screen').style.display = "none";
             document.getElementById('main-header').style.display = "block";
 
-            const saved = localStorage.getItem(STORAGE_KEY);
+            await loadFromGoogle();
 
+            const saved = localStorage.getItem(STORAGE_KEY);
             if (saved) {
                 state.projects = JSON.parse(saved);
             }
@@ -547,9 +576,43 @@
             if (state.projects.length === 0) {
                 createDefaultProject();
             }
+
             setupExcluirListeners();
             renderHome();
         }
+
+        setInterval(async () => {
+            await loadFromGoogle();
+
+            const saved = localStorage.getItem(STORAGE_KEY);
+            if (saved) {
+                const newData = JSON.parse(saved);
+
+                // evita render desnecessário
+                if (JSON.stringify(newData) !== JSON.stringify(state.projects)) {
+                    state.projects = newData;
+
+                    if (state.currentProjectId) {
+                        updateDashboard();
+                    } else {
+                        renderHome();
+                    }
+                }
+            }
+        }, 5000); // a cada 5 segundos
+
+        window.addEventListener("storage", (event) => {
+            if (event.key === STORAGE_KEY) {
+                const newData = JSON.parse(event.newValue);
+                state.projects = newData;
+
+                if (state.currentProjectId) {
+                    updateDashboard();
+                } else {
+                    renderHome();
+                }
+            }
+        });
 
         function saveHistory(url) {
             let history = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
@@ -985,10 +1048,10 @@
             if (!url) return;
 
             const res = await fetch(url);
-            const data = await res.text();
+            const data = await res.json();
 
-            if (data && data !== "{}") {
-                localStorage.setItem(STORAGE_KEY, data);
+            if (data && data.length) {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
             }
         }
 
