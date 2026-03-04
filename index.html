@@ -1,0 +1,1016 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ultimate Planner Pro - Analytics Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    colors: {
+                        stone: { 50: '#fafaf9', 100: '#f5f5f4', 200: '#e7e5e4', 800: '#292524', 900: '#1c1917' },
+                        teal: { 500: '#14b8a6', 600: '#0d9488', 700: '#0f766e' },
+                        amber: { 500: '#f59e0b', 600: '#d97706' },
+                        red: { 500: '#ef4444', 600: '#dc2626' },
+                        indigo: { 500: '#6366f1' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #fafaf9;
+            color: #1c1917;
+            scroll-behavior: smooth;
+            overflow-x: hidden;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 100;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+            backdrop-filter: blur(4px);
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .card-shadow {
+            box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.03);
+        }
+
+        .category-tag {
+            background: #f1f1f0;
+            color: #787875;
+            font-size: 9px;
+            font-weight: 800;
+            padding: 4px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-circle {
+            width: 22px;
+            height: 22px;
+            border: 2px solid #e7e5e4;
+            border-radius: 50%;
+            transition: all 0.2s;
+        }
+
+        .status-circle.done {
+            background-color: #0d9488;
+            border-color: #0d9488;
+            position: relative;
+        }
+
+        .status-circle.done::after {
+            content: '✓';
+            color: white;
+            font-size: 12px;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        canvas {
+            max-width: 100% !important;
+        }
+    </style>
+</head>
+
+<body class="antialiased flex flex-col min-h-screen">
+
+    <div id="connect-screen" class="fixed inset-0 flex items-center justify-center bg-stone-50 z-50">
+        <div class="bg-white p-10 rounded-3xl shadow-xl w-full max-w-md text-center space-y-6">
+            <div class="flex justify-center"><span class="text-4xl">☁️</span></div>
+            <h2 class="text-xl font-black">Conectar Planner</h2>
+            <p class="text-stone-400 text-sm">Insira o link do Google Apps Script</p>
+            <input id="script-url" type="text" placeholder="https://script.google.com/macros/s/.../exec"
+                class="w-full px-4 py-3 rounded-xl border outline-none"
+                value="https://script.google.com/macros/s/AKfycbxnFjE-f71PDFdeUilesJgjxx7uHteIXGaJoHO4MKaaLof7zPZr7TdUjdiBBb3Qc73d/exec">
+            <button onclick="connectScript()" class="w-full bg-stone-900 text-white py-3 rounded-xl font-bold">
+                Entrar e Sincronizar
+            </button>
+
+            <div id="history-list" class="mt-4 space-y-2"></div>
+
+        </div>
+    </div>
+
+
+    <!-- Header -->
+    <header id="main-header" class="bg-white border-b border-stone-200 sticky top-0 z-50 shadow-sm"
+        style="display: none;">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <button onclick="showView('home')"
+                class="flex items-center gap-2 text-stone-900 font-extrabold text-xl hover:opacity-80 transition-opacity">
+                UltimatePlanner
+            </button>
+            <div class="flex items-center gap-4">
+                <button onclick="openProjectModal()"
+                    class="bg-stone-900 text-white px-5 py-2 rounded-xl text-sm font-bold hover:bg-stone-800 transition-all">+
+                    Novo Projeto</button>
+
+                <button onclick="logout()" class="text-sm font-bold text-stone-500 hover:text-red-500">
+                    Sair
+                </button>
+
+            </div>
+        </div>
+    </header>
+
+    <!-- VIEW: HOME -->
+    <main id="view-home" class="flex-grow max-w-7xl mx-auto px-4 py-12 w-full space-y-12">
+        <div class="text-center space-y-2">
+            <h1 class="text-4xl font-black text-stone-900 tracking-tight">Meus Projetos</h1>
+            <p class="text-stone-500 max-w-xl mx-auto font-medium">Controle total sobre seus objetivos e finanças.</p>
+        </div>
+        <div id="projects-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"></div>
+    </main>
+
+    <!-- VIEW: DASHBOARD (PROJETO) -->
+    <main id="view-dashboard" class="hidden flex-grow max-w-7xl mx-auto px-4 py-8 w-full space-y-8">
+        <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-6 border-b border-stone-100 pb-6">
+            <div class="flex items-center gap-4">
+                <button onclick="showView('home')"
+                    class="p-2.5 hover:bg-white hover:shadow-md border border-stone-200 rounded-full transition-all">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                    </svg>
+                </button>
+                <div>
+                    <h2 id="current-project-title" class="text-2xl font-black text-stone-900 leading-none mb-1">...</h2>
+                    <p id="current-project-desc" class="text-stone-400 text-sm font-medium">...</p>
+                </div>
+            </div>
+            <nav class="flex bg-stone-200/50 p-1.5 rounded-2xl overflow-x-auto whitespace-nowrap">
+                <button onclick="switchTab('checklist')" id="tab-btn-checklist"
+                    class="px-6 py-2.5 rounded-xl text-xs font-bold transition-all bg-white shadow-sm text-stone-900">Checklist</button>
+                <button onclick="switchTab('stats')" id="tab-btn-stats"
+                    class="px-6 py-2.5 rounded-xl text-xs font-bold transition-all text-stone-500">Analytics</button>
+                <button onclick="switchTab('finance')" id="tab-btn-finance"
+                    class="px-6 py-2.5 rounded-xl text-xs font-bold transition-all text-stone-500">Finanças</button>
+            </nav>
+        </div>
+
+        <!-- ABA CHECKLIST -->
+        <div id="tab-checklist" class="tab-content active space-y-10">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div class="bg-white p-6 rounded-3xl border border-stone-200/60 card-shadow">
+                    <span class="text-[10px] font-extrabold text-stone-400 uppercase tracking-widest block mb-2">Total
+                        Estimado</span>
+                    <span id="kpi-total" class="text-2xl font-black text-stone-900">R$ 0</span>
+                </div>
+                <div class="bg-teal-600 p-6 rounded-3xl shadow-lg shadow-teal-600/20">
+                    <span class="text-[10px] font-extrabold text-teal-100 uppercase tracking-widest block mb-2">Saldo em
+                        Caixa</span>
+                    <span id="kpi-balance" class="text-2xl font-black text-white">R$ 0</span>
+                </div>
+                <div
+                    class="bg-white p-6 rounded-3xl border border-stone-200/60 card-shadow md:col-span-2 flex items-center justify-between gap-6">
+                    <div class="flex-1">
+                        <span
+                            class="text-[10px] font-extrabold text-stone-400 uppercase tracking-widest block mb-2">Progresso
+                            Geral</span>
+                        <div class="w-full bg-stone-100 h-2.5 rounded-full overflow-hidden mb-2">
+                            <div id="progresso-fase-bar" class="h-full bg-teal-500 transition-all duration-500"
+                                style="width: 0%"></div>
+                        </div>
+                        <span id="kpi-completion" class="text-2xl font-black text-stone-900">0%</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="space-y-6">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <h3 class="text-2xl font-black text-stone-900">Itens do Planejamento</h3>
+                    <div class="flex items-center gap-3">
+                        <div
+                            class="flex bg-stone-100 p-1 rounded-xl text-[11px] font-extrabold uppercase tracking-tight">
+                            <button onclick="setFilter('all')" id="f-all"
+                                class="px-5 py-2 rounded-lg transition-all bg-white text-stone-900 shadow-sm">Tudo</button>
+                            <button onclick="setFilter('pending')" id="f-pending"
+                                class="px-5 py-2 rounded-lg transition-all text-stone-400">Pendentes</button>
+                            <button onclick="setFilter('done')" id="f-done"
+                                class="px-5 py-2 rounded-lg transition-all text-stone-400">Concluídos</button>
+                        </div>
+                        <button onclick="openItemModal()"
+                            class="bg-stone-900 text-white px-4 py-2.5 rounded-xl text-xs font-bold hover:bg-stone-800 transition-all">+
+                            Item</button>
+                    </div>
+                </div>
+                <div id="category-filters" class="flex flex-wrap gap-2"></div>
+                <div id="items-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5"></div>
+            </div>
+        </div>
+
+        <!-- ABA ANALYTICS (NOVA) -->
+        <div id="tab-stats" class="tab-content space-y-8">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Card Insights -->
+                <div class="lg:col-span-1 grid grid-cols-1 gap-4">
+                    <div class="bg-white p-6 rounded-3xl border border-stone-200 card-shadow">
+                        <span class="text-[10px] font-black text-stone-400 uppercase tracking-widest block">Fase mais
+                            Cara</span>
+                        <h4 id="stat-top-cat" class="text-xl font-black text-stone-900 mt-1">-</h4>
+                        <p id="stat-top-val" class="text-stone-400 text-sm font-bold">R$ 0,00</p>
+                    </div>
+                    <div class="bg-white p-6 rounded-3xl border border-stone-200 card-shadow">
+                        <span class="text-[10px] font-black text-stone-400 uppercase tracking-widest block">Custo Médio
+                            p/ Item</span>
+                        <h4 id="stat-avg-item" class="text-xl font-black text-stone-900 mt-1">R$ 0,00</h4>
+                        <p class="text-stone-400 text-sm font-bold">Investimento médio</p>
+                    </div>
+                    <div class="bg-white p-6 rounded-3xl border border-stone-200 card-shadow">
+                        <span class="text-[10px] font-black text-stone-400 uppercase tracking-widest block">Taxa de
+                            Queima</span>
+                        <h4 id="stat-burn-rate" class="text-xl font-black text-teal-600 mt-1">0%</h4>
+                        <p class="text-stone-400 text-sm font-bold">Do orçamento total já gasto</p>
+                    </div>
+                </div>
+
+                <!-- Gráfico de Radar: Distribuição de Valor por Fase -->
+                <div class="lg:col-span-2 bg-white p-8 rounded-[2rem] border border-stone-200 card-shadow">
+                    <h4 class="font-black text-stone-900 mb-6 flex items-center justify-between">
+                        Peso Financeiro por Fase
+                        <span class="text-[10px] text-stone-400 font-bold uppercase tracking-widest">Valor R$</span>
+                    </h4>
+                    <div class="h-[300px] flex items-center justify-center">
+                        <canvas id="radarChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- Gráfico de Linha: Fluxo de Valor -->
+                <div class="bg-white p-8 rounded-[2rem] border border-stone-200 card-shadow">
+                    <h4 class="font-black text-stone-900 mb-6">Projeção: Estimado vs Realizado</h4>
+                    <div class="h-[300px]">
+                        <canvas id="lineChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Gráfico de Barras: Status por Categoria -->
+                <div class="bg-white p-8 rounded-[2rem] border border-stone-200 card-shadow">
+                    <h4 class="font-black text-stone-900 mb-6">Eficiência por Categoria (Itens)</h4>
+                    <div class="h-[300px]">
+                        <canvas id="barChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ABA FINANCEIRA -->
+        <div id="tab-finance" class="tab-content space-y-8">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div class="lg:col-span-1 space-y-6">
+                    <div class="bg-stone-900 text-white p-10 rounded-[2.5rem] shadow-2xl relative overflow-hidden">
+                        <div class="relative z-10">
+                            <span class="text-xs font-bold uppercase text-stone-400 tracking-widest">Caixa
+                                Disponível</span>
+                            <h3 id="fin-total-balance" class="text-5xl font-black mt-3">R$ 0,00</h3>
+                        </div>
+                        <div class="absolute -right-6 -bottom-6 text-[120px] opacity-10 rotate-12">💳</div>
+                    </div>
+                    <div class="bg-white p-8 rounded-3xl border border-stone-200 card-shadow space-y-5">
+                        <h4 class="font-black text-stone-900">Gestão de Saldo</h4>
+                        <div class="flex gap-2">
+                            <button onclick="openFundModal('IN')"
+                                class="flex-1 bg-teal-600 text-white py-4 rounded-2xl font-black hover:bg-teal-700 shadow-lg shadow-teal-600/20 transition-all">Aportar</button>
+                            <button onclick="openFundModal('OUT')"
+                                class="flex-1 bg-stone-100 text-stone-900 py-4 rounded-2xl font-black hover:bg-stone-200 transition-all">Retirar</button>
+                        </div>
+                    </div>
+                </div>
+                <div
+                    class="lg:col-span-2 bg-white rounded-[2.5rem] border border-stone-200 card-shadow overflow-hidden flex flex-col">
+                    <div class="p-8 border-b border-stone-100 flex justify-between items-center">
+                        <h4 class="font-black text-stone-900">Histórico de Movimentações</h4>
+                        <span class="text-[10px] font-extrabold text-stone-400 uppercase tracking-widest">Logs</span>
+                    </div>
+                    <div class="overflow-y-auto max-h-[500px]">
+                        <table class="w-full text-left">
+                            <tbody id="finance-log" class="divide-y divide-stone-50"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Modais (Mesma Estrutura) -->
+    <div id="modal-funds" class="modal" onclick="if(event.target === this) closeModal('modal-funds')">
+        <div class="bg-white rounded-[2.5rem] shadow-2xl max-w-md w-full p-10 space-y-6 relative"
+            onclick="event.stopPropagation()">
+            <button onclick="closeModal('modal-funds')"
+                class="absolute top-6 right-6 p-2 text-stone-300 hover:text-stone-900">✕</button>
+            <h3 id="fund-modal-title" class="text-2xl font-black text-stone-900">Transação</h3>
+            <form id="form-funds" class="space-y-4">
+                <input type="hidden" id="fund-type">
+                <div class="space-y-1">
+                    <label class="text-[10px] font-black uppercase text-stone-400 ml-2">Valor</label>
+                    <input type="number" id="fund-val" required placeholder="R$ 0,00"
+                        class="w-full px-5 py-4 rounded-2xl bg-stone-50 border border-stone-100 outline-none font-black text-xl">
+                </div>
+                <div id="fund-reason-container" class="space-y-1">
+                    <label class="text-[10px] font-black uppercase text-stone-400 ml-2">Justificativa</label>
+                    <textarea id="fund-reason" placeholder="Ex: Ajuste de conta..."
+                        class="w-full px-5 py-4 rounded-2xl bg-stone-50 border border-stone-100 outline-none resize-none"
+                        rows="2"></textarea>
+                </div>
+                <button type="submit"
+                    class="w-full bg-stone-900 text-white py-4 rounded-2xl font-black">Confirmar</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal Novo Projeto -->
+    <div id="modal-project" class="modal" onclick="if(event.target === this) closeModal('modal-project')">
+        <div class="bg-white rounded-[2rem] shadow-2xl max-w-md w-full p-8 space-y-6 relative"
+            onclick="event.stopPropagation()">
+            <button onclick="closeModal('modal-project')"
+                class="absolute top-6 right-6 p-2 text-stone-300 hover:text-stone-900">✕</button>
+            <h3 class="text-xl font-black">Novo Projeto</h3>
+            <form id="form-project" class="space-y-4">
+                <input type="text" id="p-name" required placeholder="Nome do Projeto"
+                    class="w-full px-5 py-3.5 rounded-2xl bg-stone-50 border border-stone-100 outline-none font-bold">
+                <input type="text" id="p-desc" placeholder="Objetivo curto"
+                    class="w-full px-5 py-3.5 rounded-2xl bg-stone-50 border border-stone-100 outline-none">
+                <input type="text" id="p-icon" placeholder="Emoji (🏠, 💻, 🚗)"
+                    class="w-full px-5 py-3.5 rounded-2xl bg-stone-50 border border-stone-100 outline-none">
+                <button type="submit" class="w-full bg-stone-900 text-white py-4 rounded-2xl font-black">Criar
+                    Projeto</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal Novo Item -->
+    <div id="modal-item" class="modal" onclick="if(event.target === this) closeModal('modal-item')">
+        <div class="bg-white rounded-[2rem] shadow-2xl max-w-md w-full p-8 space-y-6 relative"
+            onclick="event.stopPropagation()">
+            <button onclick="closeModal('modal-item')"
+                class="absolute top-6 right-6 p-2 text-stone-300 hover:text-stone-900">✕</button>
+            <h3 id="item-modal-title" class="text-xl font-black">Configurar Item</h3>
+            <form id="form-item" class="space-y-4">
+                <input type="hidden" id="edit-item-id">
+                <input type="text" id="i-name" required placeholder="Nome do Item"
+                    class="w-full px-5 py-3.5 rounded-2xl bg-stone-50 border border-stone-100 outline-none font-bold">
+                <input type="text" id="i-cat" required placeholder="Categoria/Fase"
+                    class="w-full px-5 py-3.5 rounded-2xl bg-stone-50 border border-stone-100 outline-none font-bold">
+                <textarea id="i-desc" placeholder="Notas"
+                    class="w-full px-5 py-3.5 rounded-2xl bg-stone-50 border border-stone-100 outline-none resize-none"
+                    rows="2"></textarea>
+                <input type="number" id="i-val" required placeholder="Valor R$ 0,00"
+                    class="w-full px-5 py-4 rounded-2xl bg-stone-50 border border-stone-100 outline-none font-black text-xl">
+                <button type="submit" class="w-full bg-teal-600 text-white py-4 rounded-2xl font-black shadow-lg">Salvar
+                    Item</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modais de Segurança -->
+    <div id="modal-delete-project" class="modal" onclick="closeModal('modal-delete-project')">
+        <div class="bg-white rounded-[2.5rem] shadow-2xl max-w-md w-full p-10 text-center space-y-6 relative"
+            onclick="event.stopPropagation()">
+            <div class="text-5xl">🛑</div>
+            <h3 class="text-2xl font-black">Apagar Projeto?</h3>
+            <p class="text-stone-500 text-sm">Digite <strong class="text-stone-900">EXCLUIR</strong> para confirmar.</p>
+            <input type="text" id="confirm-delete-input" placeholder="Digite aqui..."
+                class="w-full px-5 py-4 rounded-2xl bg-stone-50 border-2 border-red-100 outline-none font-black text-center uppercase">
+            <button id="btn-confirm-delete-project"
+                class="w-full py-4 rounded-2xl font-black bg-red-600 text-white opacity-50 cursor-not-allowed"
+                disabled>Sim, Deletar Tudo</button>
+
+        </div>
+    </div>
+
+    <div id="modal-delete-item" class="modal" onclick="closeModal('modal-delete-item')">
+        <div class="bg-white rounded-[2rem] shadow-2xl max-w-sm w-full p-8 text-center space-y-6 relative"
+            onclick="event.stopPropagation()">
+            <div class="text-4xl">🗑️</div>
+            <h3 class="text-xl font-black">Remover Item?</h3>
+            <p class="text-stone-500 text-sm">Deseja remover "<span id="delete-item-name" class="font-bold"></span>"?
+            </p>
+            <div class="flex flex-col gap-2">
+                <button id="btn-confirm-delete-item"
+                    class="w-full py-4 rounded-2xl font-black bg-red-600 text-white">Sim, Remover</button>
+                <button onclick="closeModal('modal-delete-item')"
+                    class="w-full py-3 rounded-2xl font-bold text-stone-400">Cancelar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="modal-delete-log" class="modal" onclick="closeModal('modal-delete-log')">
+        <div class="bg-white rounded-[2rem] shadow-2xl max-w-sm w-full p-8 text-center space-y-6 relative"
+            onclick="event.stopPropagation()">
+            <div class="text-4xl">⚖️</div>
+            <h3 class="text-xl font-black">Ajustar Saldo?</h3>
+            <p class="text-stone-500 text-sm">Excluir este registro reajustará o saldo automaticamente.</p>
+            <button id="btn-confirm-delete-log"
+                class="w-full py-4 rounded-2xl font-black bg-red-600 text-white shadow-lg">Confirmar Ajuste</button>
+        </div>
+    </div>
+
+    <div id="modal-confirm-fund" class="modal" onclick="closeModal('modal-confirm-fund')">
+        <div class="bg-white rounded-[2rem] shadow-2xl max-w-sm w-full p-10 text-center space-y-6 relative"
+            onclick="event.stopPropagation()">
+            <div class="text-6xl">💸</div>
+            <h3 class="text-2xl font-black">Saldo Insuficiente</h3>
+            <p class="text-stone-500 text-sm">Continuar mesmo com saldo negativo?</p>
+            <div class="flex flex-col gap-3">
+                <button id="confirm-force-buy"
+                    class="w-full py-4 rounded-2xl font-black bg-amber-500 text-white">Comprar Mesmo Assim</button>
+                <button onclick="closeModal('modal-confirm-fund')"
+                    class="w-full py-4 rounded-2xl font-bold text-stone-400">Aguardar</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const SCRIPT_URL_KEY = 'planner_script_url';
+        const STORAGE_KEY = 'ultimate_planner_v7_final';
+        const HISTORY_KEY = 'planner_history';
+
+        let state = {
+            projects: [],
+            currentProjectId: null,
+            currentTab: 'checklist',
+            filter: 'all',
+            catFilter: null,
+            pendingDeleteId: null,
+            charts: {
+                radar: null,
+                line: null,
+                bar: null
+            }
+        };
+
+        const DEFAULT_ITEMS = [
+            { id: 1, phase: "Fase 1: Base e Ergonomia", name: "Suporte Articulado Duplo", spec: "Pistão a gás (padrão VESA). Ex: ELG F80N ou F160N.", min: 250, max: 450, done: false },
+            { id: 2, phase: "Fase 1: Base e Ergonomia", name: "Hub USB-C / Docking Station", spec: "5 em 1 ou superior (com HDMI 4K e Power Delivery).", min: 120, max: 280, done: false },
+            { id: 3, phase: "Fase 1: Base e Ergonomia", name: "Cabo de Rede Cat6", spec: "Blindado (SFTP) para evitar interferências.", min: 30, max: 60, done: false },
+            { id: 4, phase: "Fase 1: Base e Ergonomia", name: "Mouse Gamer", spec: "Logitech G Pro X Superlight. Sensor HERO 25K e peso ultra-leve.", min: 700, max: 700, done: false },
+            { id: 5, phase: "Fase 2: Performance e Gameplay", name: "Monitor Externo", spec: "Painel IPS ou VA, 144Hz a 165Hz. Full HD (24\") ou QHD (27\").", min: 900, max: 1800, done: false },
+            { id: 6, phase: "Fase 2: Performance e Gameplay", name: "Controle de Videogame", spec: "Xbox Series ou 8BitDo Ultimate (nativo Windows).", min: 350, max: 500, done: false },
+            { id: 7, phase: "Fase 2: Performance e Gameplay", name: "Volante para Simulação", spec: "Logitech G29 ou G923 (com pedais).", min: 1600, max: 2200, done: false },
+            { id: 8, phase: "Fase 3: Conforto Premium", name: "Teclado de Alto Desempenho", spec: "Logitech G Pro X (Rosa) ou ATK RS6 Ultra (Rapid Trigger).", min: 700, max: 1600, done: false },
+            { id: 9, phase: "Fase 3: Conforto Premium", name: "Cadeira Ergonômica", spec: "Flexform, Cavaletti ou Herman Miller (usada). Braços 3D.", min: 1200, max: 3500, done: false },
+            { id: 10, phase: "Fase 3: Conforto Premium", name: "Headset Wireless", spec: "Logitech G733 ou HyperX Cloud Alpha Wireless.", min: 700, max: 1200, done: false },
+            { id: 11, phase: "Fase 3: Conforto Premium", name: "SSD NVMe (Upgrade)", spec: "Kingston KC3000 ou WD Black SN850X (Gen4). 1TB.", min: 500, max: 800, done: false },
+            { id: 12, phase: "Lifestyle (Adicionais)", name: "Mousepad Gamer", spec: "Modelos Speed ou Control (Fallen, Artisan ou Razer).", min: 100, max: 300, done: false },
+            { id: 13, phase: "Lifestyle (Adicionais)", name: "Iluminação Ambiance", spec: "Fita LED RGBIC endereçável para fundo de bancada.", min: 150, max: 300, done: false },
+            { id: 14, phase: "Lifestyle (Adicionais)", name: "Gerenciamento de Cabos", spec: "Calhas e organizadores de velcro.", min: 50, max: 50, done: false }
+        ];
+
+        function createDefaultProject() {
+            const project = {
+                id: Date.now(),
+                name: "Setup Gamer",
+                desc: "Projeto automático",
+                icon: "🎮",
+                balance: 0,
+                logs: [],
+                items: DEFAULT_ITEMS.map(item => ({
+                    id: item.id,
+                    name: item.name,
+                    category: item.phase,  
+                    desc: item.spec,       
+                    value: item.max,        
+                    done: item.done
+                }))
+            };
+
+            state.projects.push(project);
+            save();
+        }
+
+        function init() {
+            const scriptUrl = localStorage.getItem(SCRIPT_URL_KEY);
+
+            if (!scriptUrl) {
+                document.getElementById('connect-screen').style.display = "flex";
+                document.getElementById('main-header').style.display = "none";
+                loadHistory()
+                return;
+            }
+
+            document.getElementById('connect-screen').style.display = "none";
+            document.getElementById('main-header').style.display = "block";
+
+            const saved = localStorage.getItem(STORAGE_KEY);
+
+            if (saved) {
+                state.projects = JSON.parse(saved);
+            }
+
+            if (state.projects.length === 0) {
+                createDefaultProject();
+            }
+            setupExcluirListeners();
+            renderHome();
+        }
+
+        function saveHistory(url) {
+            let history = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+            if (!history.includes(url)) {
+                history.push(url);
+                localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+            }
+        }
+
+        function loadHistory() {
+            const history = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+            const container = document.getElementById("history-list");
+
+            if (!container) return;
+
+            container.innerHTML = "";
+
+            if (history.length === 0) {
+                container.innerHTML = `<p class="text-xs text-stone-400">Nenhum histórico salvo</p>`;
+                return;
+            }
+
+            history.slice().reverse().forEach(url => {
+                const btn = document.createElement("button");
+                btn.className = "w-full text-left px-4 py-2 rounded-xl bg-stone-100 hover:bg-stone-200 text-xs break-all";
+                btn.innerText = 'Entrar no ultimo Planner acessado';
+                btn.onclick = () => {
+                    document.getElementById("script-url").value = url;
+                };
+                container.appendChild(btn);
+            });
+        }
+
+        function selectHistory(url) {
+            document.getElementById('script-url').value = url;
+        }
+
+
+        function save() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(state.projects));
+            syncToGoogle();
+        }
+
+        const formatBRL = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v).replace('R$', 'R$ ');
+
+        function showView(view) {
+            document.getElementById('view-home').classList.add('hidden');
+            document.getElementById('view-dashboard').classList.add('hidden');
+            document.getElementById(`view-${view}`).classList.remove('hidden');
+            if (view === 'home') state.currentProjectId = null;
+        }
+
+        function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+
+        function openProject(id) {
+            state.currentProjectId = id;
+            const p = state.projects.find(x => x.id === id);
+            document.getElementById('current-project-title').innerText = p.name;
+            document.getElementById('current-project-desc').innerText = p.desc;
+            showView('dashboard');
+            switchTab('checklist');
+        }
+
+        function switchTab(tab) {
+            state.currentTab = tab;
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.getElementById(`tab-${tab}`).classList.add('active');
+
+            const btnCheck = document.getElementById('tab-btn-checklist');
+            const btnStats = document.getElementById('tab-btn-stats');
+            const btnFin = document.getElementById('tab-btn-finance');
+
+            [btnCheck, btnStats, btnFin].forEach(b => {
+                b.className = "px-6 py-2.5 rounded-xl text-xs font-bold transition-all text-stone-500";
+            });
+
+            if (tab === 'checklist') {
+                btnCheck.className = "px-6 py-2.5 rounded-xl text-xs font-bold transition-all bg-white shadow-sm text-stone-900";
+                updateDashboard();
+            } else if (tab === 'stats') {
+                btnStats.className = "px-6 py-2.5 rounded-xl text-xs font-bold transition-all bg-white shadow-sm text-stone-900";
+                renderAnalytics();
+            } else {
+                btnFin.className = "px-6 py-2.5 rounded-xl text-xs font-bold transition-all bg-white shadow-sm text-stone-900";
+                renderFinance();
+            }
+        }
+
+        function updateDashboard() {
+            const p = state.projects.find(x => x.id === state.currentProjectId);
+            const total = p.items.reduce((a, b) => a + b.value, 0);
+            const boughtCount = p.items.filter(i => i.done).length;
+            const perc = p.items.length > 0 ? Math.round((boughtCount / p.items.length) * 100) : 0;
+
+            document.getElementById('kpi-total').innerText = formatBRL(total);
+            document.getElementById('kpi-balance').innerText = formatBRL(p.balance);
+            document.getElementById('kpi-completion').innerText = `${perc}%`;
+            document.getElementById('progresso-fase-bar').style.width = `${perc}%`;
+
+            renderCategoryPills(p);
+            renderItemsGrid(p);
+        }
+
+        // --- ANALYTICS ENGINE ---
+        function renderAnalytics() {
+            const p = state.projects.find(x => x.id === state.currentProjectId);
+            const cats = [...new Set(p.items.map(i => i.category))];
+
+            // Stats Calculations
+            const catTotals = cats.map(c => ({
+                cat: c,
+                val: p.items.filter(i => i.category === c).reduce((a, b) => a + b.value, 0)
+            })).sort((a, b) => b.val - a.val);
+
+            const totalProjectVal = p.items.reduce((a, b) => a + b.value, 0);
+            const actualSpent = p.items.filter(i => i.done).reduce((a, b) => a + b.value, 0);
+            const avgItem = p.items.length > 0 ? totalProjectVal / p.items.length : 0;
+            const burnRate = totalProjectVal > 0 ? Math.round((actualSpent / totalProjectVal) * 100) : 0;
+
+            document.getElementById('stat-top-cat').innerText = catTotals[0]?.cat || '-';
+            document.getElementById('stat-top-val').innerText = formatBRL(catTotals[0]?.val || 0);
+            document.getElementById('stat-avg-item').innerText = formatBRL(avgItem);
+            document.getElementById('stat-burn-rate').innerText = `${burnRate}%`;
+
+            // Chart 1: Radar (Peso Financeiro)
+            const radarCtx = document.getElementById('radarChart').getContext('2d');
+            if (state.charts.radar) state.charts.radar.destroy();
+            state.charts.radar = new Chart(radarCtx, {
+                type: 'radar',
+                data: {
+                    labels: cats.map(c => c.length > 15 ? c.substring(0, 15) + '...' : c),
+                    datasets: [{
+                        label: 'Investimento por Fase',
+                        data: cats.map(c => p.items.filter(i => i.category === c).reduce((a, b) => a + b.value, 0)),
+                        backgroundColor: 'rgba(13, 148, 136, 0.2)',
+                        borderColor: '#0d9488',
+                        pointBackgroundColor: '#0d9488',
+                        borderWidth: 2
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, scales: { r: { ticks: { display: false } } } }
+            });
+
+            // Chart 2: Line (Gasto Acumulado)
+            const lineCtx = document.getElementById('lineChart').getContext('2d');
+            if (state.charts.line) state.charts.line.destroy();
+
+            // Simulação de Timeline baseada nos logs de OUT
+            const timeline = p.logs.filter(l => l.type === 'OUT').sort((a, b) => new Date(a.date) - new Date(b.date));
+            let cumulative = 0;
+            const timelineData = timeline.map(l => {
+                cumulative += l.val;
+                return { x: new Date(l.date).toLocaleDateString(), y: cumulative };
+            });
+
+            state.charts.line = new Chart(lineCtx, {
+                type: 'line',
+                data: {
+                    labels: timelineData.map(d => d.x),
+                    datasets: [{
+                        label: 'Gasto Real Acumulado',
+                        data: timelineData.map(d => d.y),
+                        borderColor: '#0d9488',
+                        backgroundColor: 'rgba(13, 148, 136, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+            });
+
+            // Chart 3: Bars (Status Quantitativo)
+            const barCtx = document.getElementById('barChart').getContext('2d');
+            if (state.charts.bar) state.charts.bar.destroy();
+            state.charts.bar = new Chart(barCtx, {
+                type: 'bar',
+                data: {
+                    labels: cats.map(c => c.split(':')[0] || c),
+                    datasets: [
+                        {
+                            label: 'Comprados',
+                            data: cats.map(c => p.items.filter(i => i.category === c && i.done).length),
+                            backgroundColor: '#0d9488'
+                        },
+                        {
+                            label: 'Pendentes',
+                            data: cats.map(c => p.items.filter(i => i.category === c && !i.done).length),
+                            backgroundColor: '#e7e5e4'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'bottom' } },
+                    scales: { x: { stacked: true }, y: { stacked: true } }
+                }
+            });
+        }
+
+        // --- CORE FUNCTIONS (CHECKLIST & FINANCE) ---
+        function renderItemsGrid(p) {
+            const grid = document.getElementById('items-grid');
+            grid.innerHTML = '';
+            let filtered = p.items;
+            if (state.filter === 'pending') filtered = filtered.filter(i => !i.done);
+            if (state.filter === 'done') filtered = filtered.filter(i => i.done);
+            if (state.catFilter) filtered = filtered.filter(i => i.category === state.catFilter);
+
+            filtered.forEach(item => {
+                const card = document.createElement('div');
+                card.className = "bg-white p-6 rounded-3xl border border-stone-100 card-shadow group relative";
+                card.innerHTML = `
+                    <div class="flex justify-between items-start mb-4">
+                        <span class="category-tag">${item.category}</span>
+                        <div onclick="toggleItem(${item.id});" class="status-circle cursor-pointer ${item.done ? 'done' : ''}"></div>
+                    </div>
+                    <h4 class="font-black text-stone-900 ${item.done ? 'line-through text-stone-300' : ''}">${item.name}</h4>
+                    <p class="text-xs text-stone-400 mt-1 line-clamp-1">${item.desc || ''}</p>
+                    <div class="mt-4 pt-4 border-t border-stone-50 flex justify-between items-center">
+                        <span class="text-sm font-black text-stone-900">${formatBRL(item.value)}</span>
+                        <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                            <button onclick="editItem(${item.id})" class="p-2 text-stone-300 hover:text-stone-900">✎</button>
+                            <button onclick="requestDeleteItem(${item.id})" class="p-2 text-stone-300 hover:text-red-500">✕</button>
+                        </div>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        function toggleItem(id) {
+            const p = state.projects.find(x => x.id === state.currentProjectId);
+            const item = p.items.find(i => i.id === id);
+            if (!item.done) {
+                if (p.balance >= item.value) {
+                    processPayment(p, item);
+                } else {
+                    document.getElementById('modal-confirm-fund').classList.add('active');
+                    document.getElementById('confirm-force-buy').onclick = () => { processPayment(p, item); closeModal('modal-confirm-fund'); };
+                }
+            } else {
+                item.done = false;
+                p.balance += item.value;
+                p.logs.push({ id: Date.now(), type: 'REFUND', val: item.value, desc: `Estorno: ${item.name}`, date: new Date().toISOString() });
+                save(); updateDashboard();
+            }
+        }
+
+        function processPayment(p, item) {
+            item.done = true;
+            p.balance -= item.value;
+            p.logs.push({ id: Date.now(), type: 'OUT', val: item.value, desc: `Compra: ${item.name}`, date: new Date().toISOString() });
+            save(); updateDashboard();
+        }
+
+        function openFundModal(type) {
+            document.getElementById('fund-type').value = type;
+            document.getElementById('fund-modal-title').innerText = type === 'IN' ? 'Aportar Capital' : 'Retirar Valor';
+            document.getElementById('fund-reason').required = type === 'OUT';
+            document.getElementById('form-funds').reset();
+            document.getElementById('modal-funds').classList.add('active');
+        }
+
+        document.getElementById('form-funds').onsubmit = (e) => {
+            e.preventDefault();
+            const val = parseFloat(document.getElementById('fund-val').value);
+            const type = document.getElementById('fund-type').value;
+            const reason = document.getElementById('fund-reason').value;
+            if (!val || val <= 0) return;
+            const p = state.projects.find(x => x.id === state.currentProjectId);
+            if (type === 'IN') {
+                p.balance += val;
+                p.logs.push({ id: Date.now(), type: 'IN', val: val, desc: 'Aporte de Capital', date: new Date().toISOString() });
+            } else {
+                p.balance -= val;
+                p.logs.push({ id: Date.now(), type: 'MANUAL_OUT', val: val, desc: `Retirada: ${reason || 'Ajuste'}`, date: new Date().toISOString() });
+            }
+            save(); closeModal('modal-funds');
+            if (state.currentTab === 'finance') renderFinance(); else updateDashboard();
+        }
+
+        function renderFinance() {
+            const p = state.projects.find(x => x.id === state.currentProjectId);
+            document.getElementById('fin-total-balance').innerText = formatBRL(p.balance);
+            const logTable = document.getElementById('finance-log');
+            logTable.innerHTML = p.logs.slice().reverse().map(log => {
+                const isOut = log.type === 'OUT' || log.type === 'MANUAL_OUT';
+                return `
+                <tr class="group hover:bg-stone-50 transition-colors">
+                    <td class="px-8 py-5 text-sm font-bold">
+                        <div class="flex items-center gap-2">
+                             ${log.desc}
+                             ${log.type === 'MANUAL_OUT' ? '<span class="px-2 py-0.5 rounded bg-red-50 text-red-500 text-[8px] font-black uppercase">Retirada</span>' : ''}
+                        </div>
+                        <div class="text-[10px] text-stone-300 uppercase">${new Date(log.date).toLocaleDateString()}</div>
+                    </td>
+                    <td class="px-8 py-5 text-right font-black ${isOut ? 'text-stone-900' : 'text-teal-600'}">
+                        ${isOut ? '-' : '+'} ${formatBRL(log.val)}
+                    </td>
+                    <td class="px-4 py-5 text-right opacity-0 group-hover:opacity-100 transition-all">
+                        <button onclick="requestDeleteLog(${log.id})" class="text-stone-200 hover:text-red-500 p-2">✕</button>
+                    </td>
+                </tr>
+            `}).join('');
+        }
+
+        function requestDeleteLog(id) {
+            state.pendingDeleteId = id;
+            document.getElementById('modal-delete-log').classList.add('active');
+            document.getElementById('btn-confirm-delete-log').onclick = () => {
+                const p = state.projects.find(x => x.id === state.currentProjectId);
+                const log = p.logs.find(l => l.id === state.pendingDeleteId);
+                if (log.type === 'IN' || log.type === 'REFUND') p.balance -= log.val;
+                else p.balance += log.val;
+                p.logs = p.logs.filter(l => l.id !== state.pendingDeleteId);
+                save(); renderFinance(); closeModal('modal-delete-log');
+            };
+        }
+
+        // --- SYSTEM LISTENERS ---
+        function setupExcluirListeners() {
+            const input = document.getElementById('confirm-delete-input');
+            const btn = document.getElementById('btn-confirm-delete-project');
+            input.addEventListener('input', (e) => {
+                if (e.target.value.toUpperCase() === 'EXCLUIR') {
+                    btn.disabled = false; btn.classList.remove('opacity-50', 'cursor-not-allowed');
+                } else {
+                    btn.disabled = true; btn.classList.add('opacity-50', 'cursor-not-allowed');
+                }
+            });
+            btn.onclick = () => {
+                state.projects = state.projects.filter(p => p.id !== state.pendingDeleteId);
+                save(); renderHome(); closeModal('modal-delete-project');
+            };
+            document.getElementById('btn-confirm-delete-item').onclick = () => {
+                const p = state.projects.find(x => x.id === state.currentProjectId);
+                p.items = p.items.filter(i => i.id !== state.pendingDeleteId);
+                save(); updateDashboard(); closeModal('modal-delete-item');
+            };
+        }
+
+        function requestDeleteProject(id) { state.pendingDeleteId = id; document.getElementById('confirm-delete-input').value = ''; document.getElementById('modal-delete-project').classList.add('active'); }
+        function requestDeleteItem(id) {
+            state.pendingDeleteId = id;
+            const p = state.projects.find(x => x.id === state.currentProjectId);
+            document.getElementById('delete-item-name').innerText = p.items.find(i => i.id === id).name;
+            document.getElementById('modal-delete-item').classList.add('active');
+        }
+
+        function renderHome() {
+            showView('home');
+            const grid = document.getElementById('projects-grid');
+            grid.innerHTML = state.projects.map(p => {
+                const perc = p.items.length > 0 ? Math.round((p.items.filter(i => i.done).length / p.items.length) * 100) : 0;
+                return `
+                    <div class="bg-white p-8 rounded-[2.5rem] border border-stone-200 card-shadow hover:translate-y-[-4px] transition-all cursor-pointer group relative" onclick="openProject(${p.id})">
+                        <button onclick="event.stopPropagation(); requestDeleteProject(${p.id});" class="absolute top-6 right-8 h-10 w-10 flex items-center justify-center rounded-full bg-stone-50 text-stone-200 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100">✕</button>
+                        <div class="text-4xl mb-6">${p.icon}</div>
+                        <h3 class="text-xl font-black text-stone-900">${p.name}</h3>
+                        <p class="text-stone-400 text-sm mt-1 mb-6">${p.desc}</p>
+                        <div class="flex justify-between text-[10px] font-black uppercase text-stone-400 mb-2">
+                            <span>${perc}%</span>
+                            <span>${p.items.length} Itens</span>
+                        </div>
+                        <div class="w-full bg-stone-100 h-2 rounded-full overflow-hidden">
+                            <div class="bg-teal-600 h-full transition-all" style="width: ${perc}%"></div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderCategoryPills(p) {
+            const container = document.getElementById('category-filters');
+            const cats = [...new Set(p.items.map(i => i.category))];
+            container.innerHTML = `
+                <button onclick="state.catFilter=null; updateDashboard()" class="px-4 py-1.5 rounded-full text-[10px] font-black uppercase ${!state.catFilter ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-400'}">Tudo</button>
+                ${cats.map(c => `
+                    <button onclick="state.catFilter='${c}'; updateDashboard()" class="px-4 py-1.5 rounded-full text-[10px] font-black uppercase ${state.catFilter === c ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-400'}">${c}</button>
+                `).join('')}
+            `;
+        }
+
+        function openProjectModal() { document.getElementById('form-project').reset(); document.getElementById('modal-project').classList.add('active'); }
+        function openItemModal() { document.getElementById('form-item').reset(); document.getElementById('edit-item-id').value = ''; document.getElementById('modal-item').classList.add('active'); }
+
+        document.getElementById('form-project').onsubmit = (e) => {
+            e.preventDefault();
+            const p = { id: Date.now(), name: document.getElementById('p-name').value, desc: document.getElementById('p-desc').value, icon: document.getElementById('p-icon').value || '🎯', balance: 0, items: [], logs: [] };
+            state.projects.push(p); save(); renderHome(); closeModal('modal-project');
+        };
+
+        document.getElementById('form-item').onsubmit = (e) => {
+            e.preventDefault();
+            const p = state.projects.find(x => x.id === state.currentProjectId);
+            const editId = document.getElementById('edit-item-id').value;
+            const data = { id: editId ? parseInt(editId) : Date.now(), name: document.getElementById('i-name').value, category: document.getElementById('i-cat').value, desc: document.getElementById('i-desc').value, value: parseFloat(document.getElementById('i-val').value), done: editId ? p.items.find(i => i.id === parseInt(editId)).done : false };
+            if (editId) p.items[p.items.findIndex(i => i.id === parseInt(editId))] = data; else p.items.push(data);
+            save(); updateDashboard(); closeModal('modal-item');
+        };
+
+        function editItem(id) {
+            const item = state.projects.find(x => x.id === state.currentProjectId).items.find(i => i.id === id);
+            document.getElementById('edit-item-id').value = item.id;
+            document.getElementById('i-name').value = item.name;
+            document.getElementById('i-cat').value = item.category;
+            document.getElementById('i-desc').value = item.desc;
+            document.getElementById('i-val').value = item.value;
+            document.getElementById('modal-item').classList.add('active');
+        }
+
+        function setFilter(f) {
+            state.filter = f;
+            ['all', 'pending', 'done'].forEach(id => document.getElementById(`f-${id}`).className = "px-5 py-2 rounded-lg transition-all text-stone-400");
+            document.getElementById(`f-${f}`).className = "px-5 py-2 rounded-lg transition-all bg-white text-stone-900 shadow-sm";
+            updateDashboard();
+        }
+
+        async function connectScript() {
+            const url = document.getElementById('script-url').value;
+            if (!url) return alert("Cole o link do Apps Script");
+
+            localStorage.setItem(SCRIPT_URL_KEY, url);
+            await loadFromGoogle();
+            document.getElementById('connect-screen').style.display = "none";
+            saveHistory(url);
+            init();
+        }
+
+        async function loadFromGoogle() {
+            const url = localStorage.getItem(SCRIPT_URL_KEY);
+            if (!url) return;
+
+            const res = await fetch(url);
+            const data = await res.text();
+
+            if (data && data !== "{}") {
+                localStorage.setItem(STORAGE_KEY, data);
+            }
+        }
+
+        async function syncToGoogle() {
+            const url = localStorage.getItem(SCRIPT_URL_KEY);
+            if (!url) return;
+
+            const data = localStorage.getItem(STORAGE_KEY);
+
+            await fetch(url, {
+                method: "POST",
+                body: data
+            });
+        }
+
+        function logout() {
+            localStorage.removeItem(SCRIPT_URL_KEY);
+            location.reload();
+        }
+
+        init();
+    </script>
+</body>
+
+</html>
