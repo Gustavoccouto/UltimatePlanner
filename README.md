@@ -67,9 +67,3 @@ Ultimate Planner Pro, uma interface digital avançada desenvolvida para a gestã
 ## 📦 Instalação e Execução
 
 Não é necessário servidor ou banco de dados local.
-
-### Passos:
-
-Clone o repositório:
-```bash
-git clone https://github.com/seu-usuario/setup-planner-sync.git
