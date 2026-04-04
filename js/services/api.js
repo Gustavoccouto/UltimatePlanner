@@ -1,11 +1,19 @@
-import { APP_CONFIG, getAppsScriptUrl, isValidAppsScriptUrl, normalizeAppsScriptUrl } from '../config.js';
+import {
+  APP_CONFIG,
+  getAppsScriptUrl,
+  getAuthSession,
+  isValidAppsScriptUrl,
+  normalizeAppsScriptUrl
+} from '../config.js';
 
 function buildQuery(params = {}) {
   const query = new URLSearchParams();
+
   Object.entries(params || {}).forEach(([key, value]) => {
     if (value === undefined || value === null) return;
     query.set(key, typeof value === 'string' ? value : JSON.stringify(value));
   });
+
   return query.toString();
 }
 
@@ -15,7 +23,9 @@ function jsonpRequest(url) {
     const script = document.createElement('script');
 
     const cleanup = () => {
-      try { delete window[callbackName]; } catch {}
+      try {
+        delete window[callbackName];
+      } catch {}
       script.remove();
     };
 
@@ -42,16 +52,24 @@ function jsonpRequest(url) {
   });
 }
 
-export async function apiRequest(action, payload = {}) {
+export async function apiRequest(action, payload = {}, { skipAuth = false } = {}) {
   const endpoint = normalizeAppsScriptUrl(getAppsScriptUrl());
+
   if (!endpoint) throw new Error('URL do Google Apps Script não configurada.');
   if (!isValidAppsScriptUrl(endpoint)) {
     throw new Error('A URL do Google Apps Script está inválida. Ela precisa terminar em /exec.');
   }
 
+  const session = getAuthSession();
+  const fullPayload = {
+    ...payload,
+    authToken: skipAuth ? undefined : session?.token
+  };
+
   let data;
+
   try {
-    data = await jsonpRequest(`${endpoint}?${buildQuery({ action, payload })}`);
+    data = await jsonpRequest(`${endpoint}?${buildQuery({ action, payload: fullPayload })}`);
   } catch (error) {
     throw new Error(`${error.message} O app usa JSONP para evitar CORS no GitHub Pages e no localhost.`);
   }
@@ -62,9 +80,11 @@ export async function apiRequest(action, payload = {}) {
 
   if (!data.ok) {
     const message = String(data.message || 'Erro na integração.');
+
     if (message.includes('SPREADSHEET_ID')) {
       throw new Error('O Code.gs foi publicado sem o ID real da planilha. Cole o ID e faça um novo deploy.');
     }
+
     throw new Error(message);
   }
 

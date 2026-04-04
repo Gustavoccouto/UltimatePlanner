@@ -49,19 +49,44 @@ export const SheetsService = {
     }
     return pushEntityChunked(entity, records);
   },
+
   pullAll() {
     return apiRequest('pullAll', {});
   },
+
   ping() {
-    return apiRequest('ping', {});
+    return apiRequest('ping', {}, { skipAuth: true });
   },
+
   init() {
-    return apiRequest('init', {});
+    return apiRequest('init', {}, { skipAuth: true });
   },
+
   diagnose() {
-    return apiRequest('diagnose', {});
+    return apiRequest('diagnose', {}, { skipAuth: true });
   },
+
   resetAll() {
     return apiRequest('resetAll', {});
+  },
+
+  bootstrapAuth() {
+    return apiRequest('bootstrapAuth', {}, { skipAuth: true });
+  },
+
+  login(login, password) {
+    return apiRequest('login', { login, password }, { skipAuth: true });
+  },
+
+  signup({ name, login, password, workspaceKey }) {
+    return apiRequest('signup', { name, login, password, workspaceKey }, { skipAuth: true });
+  },
+
+  createUser({ name, login, password, role, workspaceKey }) {
+    return apiRequest('createUser', { name, login, password, role, workspaceKey });
+  },
+
+  listUsers() {
+    return apiRequest('listUsers', {});
   }
 };

@@ -89,9 +89,13 @@ async function bootstrap() {
   renderApp();
   await loadState();
   setupConnectivity();
+
   if (!getCurrentUser()) {
-    openOnboardingModal(renderApp);
+    await new Promise((resolve) => {
+      openOnboardingModal(() => resolve());
+    });
   }
+
   await initIntegration();
   // await seedDemoData();
   await loadState();

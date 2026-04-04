@@ -1,6 +1,7 @@
-import { APP_CONFIG, ENTITY_STORES } from '../config.js';
+import { APP_CONFIG, ENTITY_STORES, getWorkspaceKey } from '../config.js';
 
 let dbPromise;
+let currentDbName = null;
 
 const STORE_PREFIX = {
   accounts: 'acct',
@@ -35,6 +36,7 @@ function normalizeRecord(storeName, record, { allowGenerateId = false } = {}) {
   }
 
   const normalized = { ...record };
+
   if (!hasValidId(normalized)) {
     if (allowGenerateId) {
       normalized.id = createGeneratedId(storeName);
@@ -47,12 +49,21 @@ function normalizeRecord(storeName, record, { allowGenerateId = false } = {}) {
     normalized.updatedAt = new Date().toISOString();
   }
 
+  if (!normalized.workspaceKey) {
+    normalized.workspaceKey = getWorkspaceKey();
+  }
+
   return normalized;
 }
 
-function openDb() {
+function getScopedDbName() {
+  const workspaceKey = String(getWorkspaceKey() || 'guest').trim().toLowerCase();
+  return `${APP_CONFIG.dbName}__${workspaceKey}`;
+}
+
+function openDb(dbName) {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(APP_CONFIG.dbName, APP_CONFIG.dbVersion);
+    const request = indexedDB.open(dbName, APP_CONFIG.dbVersion);
 
     request.onupgradeneeded = (event) => {
       const db = event.target.result;
@@ -70,8 +81,19 @@ function openDb() {
   });
 }
 
+export function resetDbConnection() {
+  dbPromise = null;
+  currentDbName = null;
+}
+
 export async function getDb() {
-  if (!dbPromise) dbPromise = openDb();
+  const scopedName = getScopedDbName();
+
+  if (!dbPromise || currentDbName !== scopedName) {
+    dbPromise = openDb(scopedName);
+    currentDbName = scopedName;
+  }
+
   return dbPromise;
 }
 
@@ -99,6 +121,7 @@ export async function getOne(storeName, id) {
 export async function putOne(storeName, record, options = {}) {
   const normalized = normalizeRecord(storeName, record, options);
   const db = await getDb();
+
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readwrite');
     tx.objectStore(storeName).put(normalized);
@@ -111,6 +134,7 @@ export async function putOne(storeName, record, options = {}) {
 export async function bulkPut(storeName, records = [], options = {}) {
   const { skipInvalid = false, allowGenerateId = false } = options;
   const db = await getDb();
+
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readwrite');
     const store = tx.objectStore(storeName);
