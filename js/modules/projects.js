@@ -152,7 +152,7 @@ function renderProjectHeader(project, summary) {
 
       <div class="project-kpi-grid">
         <article class="card project-kpi-card"><div class="eyebrow">Total estimado</div><div class="project-kpi-value">${currency(summary.totalEstimated)}</div></article>
-        <article class="card project-kpi-card project-kpi-card-accent"><div class="eyebrow !text-white/60">Saldo em caixa</div><div class="project-kpi-value !text-white">${currency(summary.cashBalance)}</div></article>
+        <article class="card project-kpi-card project-kpi-card-accent"><div class="eyebrow">Saldo em caixa</div><div class="project-kpi-value">${currency(summary.cashBalance)}</div></article>
         <article class="card project-kpi-card"><div class="eyebrow">Progresso geral</div><div class="project-progress-line mt-4"><span style="width:${summary.progress}%"></span></div><div class="project-kpi-progress">${percent(summary.progress)}</div></article>
       </div>
     </section>`;
