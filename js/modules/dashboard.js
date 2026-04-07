@@ -1,8 +1,8 @@
-import { state, getDerivedAccounts } from '../state.js';
-import { dashboardSummary, monthlyFlow } from '../utils/calculations.js';
-import { monthLabel } from '../utils/dates.js';
-import { currency, percent, datePt } from '../utils/formatters.js';
-import { pageHeader } from '../ui.js';
+import { state, getDerivedAccounts } from "../state.js";
+import { dashboardSummary, monthlyFlow } from "../utils/calculations.js";
+import { monthLabel } from "../utils/dates.js";
+import { currency, percent, datePt } from "../utils/formatters.js";
+import { pageHeader } from "../ui.js";
 
 let flowChartInstance = null;
 
@@ -18,10 +18,12 @@ export function renderDashboard() {
     selectedMonth: state.ui.selectedMonth,
   });
 
-  const topAccounts = [...accounts].sort((a, b) => b.derivedBalance - a.derivedBalance).slice(0, 4);
+  const topAccounts = [...accounts]
+    .sort((a, b) => b.derivedBalance - a.derivedBalance)
+    .slice(0, 4);
 
   return `
-    ${pageHeader('Dashboard', 'Visão geral premium das finanças, metas e operações pendentes.')}
+    ${pageHeader("Dashboard", "Visão geral premium das finanças, metas e operações pendentes.")}
 
     <section class="dashboard-shell dashboard-shell-balanced">
       <div class="dashboard-main-stack">
@@ -55,10 +57,10 @@ export function renderDashboard() {
 
       <div class="dashboard-aux-stack">
         <div class="dashboard-side-grid dashboard-side-grid-tall">
-          ${compactStatCard('Faturas abertas', currency(summary.openInvoices), 'fa-credit-card')}
-          ${compactStatCard('Metas em andamento', percent(summary.goalsProgress), 'fa-bullseye')}
-          ${compactStatCard('Investimentos', currency(summary.invested), 'fa-chart-pie')}
-          ${compactStatCard('Contas monitoradas', String(accounts.length), 'fa-building-columns')}
+          ${compactStatCard("Faturas abertas", currency(summary.openInvoices), "fa-credit-card")}
+          ${compactStatCard("Metas em andamento", percent(summary.goalsProgress), "fa-bullseye")}
+          ${compactStatCard("Investimentos", currency(summary.invested), "fa-chart-pie")}
+          ${compactStatCard("Contas monitoradas", String(accounts.length), "fa-building-columns")}
         </div>
 
         <article class="card p-6 list-panel">
@@ -71,11 +73,11 @@ export function renderDashboard() {
           <div class="split-list split-list-mobile-safe">
             <div>
               <div class="list-caption">Últimas receitas</div>
-              ${summary.recentIncomes.length ? summary.recentIncomes.map((item) => recordLine(item, 'income')).join('') : emptyInline('Sem receitas registradas.')}
+              ${summary.recentIncomes.length ? summary.recentIncomes.map((item) => recordLine(item, "income")).join("") : emptyInline("Sem receitas registradas.")}
             </div>
             <div>
               <div class="list-caption">Últimas despesas</div>
-              ${summary.recentExpenses.length ? summary.recentExpenses.map((item) => recordLine(item, 'expense')).join('') : emptyInline('Sem despesas registradas.')}
+              ${summary.recentExpenses.length ? summary.recentExpenses.map((item) => recordLine(item, "expense")).join("") : emptyInline("Sem despesas registradas.")}
             </div>
           </div>
         </article>
@@ -90,50 +92,82 @@ export function renderDashboard() {
         </div>
       </div>
       <div class="account-grid">
-        ${topAccounts.map((account) => `
+        ${
+          topAccounts
+            .map(
+              (account) => `
           <article class="account-balance-card card-glass">
             <div class="text-sm text-slate-500">${account.bankName}</div>
             <div class="text-xl font-bold mt-1">${account.name}</div>
             <div class="text-3xl font-extrabold tracking-tight mt-5">${currency(account.derivedBalance)}</div>
             <div class="text-sm text-slate-500 mt-3">Atualizado com base nas transações válidas</div>
-          </article>`).join('') || `<div class="text-slate-500">Cadastre contas para visualizar o saldo por banco.</div>`}
+          </article>`,
+            )
+            .join("") ||
+          `<div class="text-slate-500">Cadastre contas para visualizar o saldo por banco.</div>`
+        }
       </div>
     </section>`;
 }
 
 export function mountDashboardCharts() {
-  const canvas = document.getElementById('flowChart');
-  if (!canvas || typeof Chart === 'undefined') return;
+  const canvas = document.getElementById("flowChart");
+  if (!canvas || typeof Chart === "undefined") return;
 
   if (flowChartInstance) {
     flowChartInstance.destroy();
     flowChartInstance = null;
   }
 
-  const points = monthlyFlow(state.data.transactions, state.ui.selectedMonth, state.data.creditCards).slice(-6);
+  const points = monthlyFlow(
+    state.data.transactions,
+    state.ui.selectedMonth,
+    state.data.creditCards,
+  ).slice(-6);
   if (!points.length) return;
 
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext("2d");
   flowChartInstance = new Chart(ctx, {
-    type: 'bar',
+    type: "bar",
     data: {
       labels: points.map((item) => item.month),
       datasets: [
-        { label: 'Receitas', data: points.map((item) => item.income), borderRadius: 14, maxBarThickness: 34, backgroundColor: 'rgba(125, 211, 252, .85)' },
-        { label: 'Despesas', data: points.map((item) => item.expense), borderRadius: 14, maxBarThickness: 34, backgroundColor: 'rgba(244, 114, 182, .55)' }
-      ]
+        {
+          label: "Receitas",
+          data: points.map((item) => item.income),
+          borderRadius: 14,
+          maxBarThickness: 34,
+          backgroundColor: "rgba(125, 211, 252, .85)",
+        },
+        {
+          label: "Despesas",
+          data: points.map((item) => item.expense),
+          borderRadius: 14,
+          maxBarThickness: 34,
+          backgroundColor: "rgba(244, 114, 182, .55)",
+        },
+      ],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
       resizeDelay: 200,
-      plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8 } } },
+      plugins: {
+        legend: {
+          position: "bottom",
+          labels: { usePointStyle: true, boxWidth: 8 },
+        },
+      },
       scales: {
-        x: { grid: { display: false }, ticks: { color: '#64748b' } },
-        y: { beginAtZero: true, ticks: { color: '#64748b' }, grid: { color: 'rgba(148,163,184,.12)' } }
-      }
-    }
+        x: { grid: { display: false }, ticks: { color: "#64748b" } },
+        y: {
+          beginAtZero: true,
+          ticks: { color: "#64748b" },
+          grid: { color: "rgba(148,163,184,.12)" },
+        },
+      },
+    },
   });
 }
 
@@ -151,9 +185,9 @@ function recordLine(item, tone) {
     <div class="record-line">
       <div>
         <div class="font-semibold">${item.description}</div>
-        <div class="text-sm text-slate-500">${item.category || 'Sem categoria'} • ${datePt(item.date)}</div>
+        <div class="text-sm text-slate-500">${item.category || "Sem categoria"} • ${datePt(item.date)}</div>
       </div>
-      <div class="font-bold ${tone === 'income' ? 'text-emerald-600' : 'text-rose-600'}">${currency(item.amount)}</div>
+      <div class="font-bold ${tone === "income" ? "text-emerald-600" : "text-rose-600"}">${currency(item.amount)}</div>
     </div>`;
 }
 

@@ -4,11 +4,11 @@ import {
   clearAuthSession,
   getAuthSession,
   setAppsScriptUrl,
-  setAuthSession
-} from '../config.js';
-import { resetDbConnection } from '../services/storage.js';
-import { SheetsService } from '../services/sheets.js';
-import { closeModal, openModal, toast } from '../ui.js';
+  setAuthSession,
+} from "../config.js";
+import { resetDbConnection } from "../services/storage.js";
+import { SheetsService } from "../services/sheets.js";
+import { closeModal, openModal, toast } from "../ui.js";
 
 export function ensureDefaultUrl() {
   if (!localStorage.getItem(STORAGE_KEYS.appsScriptUrl)) {
@@ -25,18 +25,22 @@ export function logoutCurrentUser() {
   resetDbConnection();
 }
 
-function getInitial(name = '') {
-  return (String(name || 'U').trim().slice(0, 1) || 'U').toUpperCase();
+function getInitial(name = "") {
+  return (
+    String(name || "U")
+      .trim()
+      .slice(0, 1) || "U"
+  ).toUpperCase();
 }
 
 function userCard(user) {
   return `
-    <button class="user-pick-card" data-login-card="${user.login}">
+    <button class="user-pick-card auth-profile-card" data-login-card="${user.login}">
       <span class="user-pick-avatar">${getInitial(user.name)}</span>
-      <span style="display:flex; flex-direction:column; gap:2px;">
-        <strong style="font-size:.95rem; color:#0f172a;">${user.name}</strong>
-        <span style="font-size:.78rem; color:#64748b;">@${user.login}</span>
-        <span style="font-size:.72rem; color:#94a3b8;">${user.workspaceKey}</span>
+      <span style="display:flex; flex-direction:column; gap:2px; min-width:0;">
+        <strong style="font-size:.95rem; color:#0f172a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${user.name}</strong>
+        <span style="font-size:.78rem; color:#64748b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">@${user.login}</span>
+        <span style="font-size:.72rem; color:#94a3b8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${user.workspaceKey}</span>
       </span>
     </button>
   `;
@@ -53,7 +57,19 @@ function buildAccessQuickList(users = []) {
 
   return `
     <div style="display:grid; gap:12px;">
-      ${users.map(userCard).join('')}
+      ${users.map(userCard).join("")}
+    </div>
+  `;
+}
+
+function buildFailureContent(message) {
+  return `
+    <div class="onboarding-shell">
+      <div class="card card-glass" style="padding:24px;">
+        <div class="badge badge-danger" style="margin-bottom:12px;">Falha</div>
+        <h3 style="margin:0 0 8px; color:#0f172a;">Falha ao preparar login</h3>
+        <p style="margin:0; color:#64748b; word-break:break-word;">${message}</p>
+      </div>
     </div>
   `;
 }
@@ -65,25 +81,18 @@ export async function openOnboardingModal(onComplete = () => {}) {
   try {
     bootstrap = await SheetsService.bootstrapAuth();
   } catch (error) {
-    openModal(`
-      <div class="modal-panel">
-        <div class="card card-glass" style="padding:24px;">
-          <div class="badge badge-danger" style="margin-bottom:12px;">Falha</div>
-          <h3 style="margin:0 0 8px; color:#0f172a;">Falha ao preparar login</h3>
-          <p style="margin:0; color:#64748b;">${error.message}</p>
-        </div>
-      </div>
-    `);
+    openModal(buildFailureContent(error.message));
     return;
   }
 
   const users = Array.isArray(bootstrap.users) ? bootstrap.users : [];
-  const ownerLogin = bootstrap.defaultOwnerLogin || 'gustavo';
-  const currentUrl = localStorage.getItem(STORAGE_KEYS.appsScriptUrl) || DEFAULT_APPS_SCRIPT_URL;
+  const ownerLogin = bootstrap.defaultOwnerLogin || "gustavo";
+  const currentUrl =
+    localStorage.getItem(STORAGE_KEYS.appsScriptUrl) || DEFAULT_APPS_SCRIPT_URL;
 
   openModal(`
-    <div class="modal-panel">
-      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:18px;">
+    <div class="onboarding-shell">
+      <div class="onboarding-header">
         <div>
           <div class="badge badge-muted" style="margin-bottom:10px;">Início rápido</div>
           <h2 style="margin:0; font-size:1.55rem; line-height:1.15; color:#0f172a;">
@@ -95,23 +104,12 @@ export async function openOnboardingModal(onComplete = () => {}) {
           </p>
         </div>
 
-        <div
-          aria-hidden="true"
-          style="
-            width:54px;
-            height:54px;
-            border-radius:18px;
-            background:linear-gradient(135deg, rgba(16,185,129,.16), rgba(255,255,255,.95));
-            border:1px solid rgba(255,255,255,.9);
-            box-shadow:0 14px 34px rgba(15,23,42,.08);
-            flex:0 0 auto;
-          "
-        ></div>
+        <div class="onboarding-header-mark" aria-hidden="true"></div>
       </div>
 
-      <div style="display:grid; grid-template-columns: minmax(0, 1.2fr) minmax(320px, .95fr); gap:18px;">
-        <section class="card" style="padding:18px;">
-          <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px;">
+      <div class="auth-layout-grid onboarding-grid">
+        <section class="card auth-left-panel onboarding-section">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; flex-wrap:wrap;">
             <h3 style="margin:0; font-size:1rem; color:#0f172a;">Perfis</h3>
             <span class="badge badge-muted">${users.length} salvo(s)</span>
           </div>
@@ -135,8 +133,8 @@ export async function openOnboardingModal(onComplete = () => {}) {
           </div>
         </section>
 
-        <section style="display:grid; gap:18px;">
-          <div class="card" style="padding:18px;">
+        <section class="auth-right-panel onboarding-side-stack">
+          <div class="card onboarding-section">
             <h3 style="margin:0 0 6px; font-size:1rem; color:#0f172a;">Entrar</h3>
             <p style="margin:0 0 14px; color:#64748b; font-size:.9rem;">
               Entre e continue de onde parou.
@@ -170,7 +168,7 @@ export async function openOnboardingModal(onComplete = () => {}) {
             </div>
           </div>
 
-          <div class="card" style="padding:18px;">
+          <div class="card onboarding-section">
             <h3 style="margin:0 0 6px; font-size:1rem; color:#0f172a;">Nova conta</h3>
             <p style="margin:0 0 14px; color:#64748b; font-size:.9rem;">
               Crie sua conta e seu próprio workspace para gerenciar seu financeiro separadamente.
@@ -227,32 +225,36 @@ export async function openOnboardingModal(onComplete = () => {}) {
     </div>
   `);
 
-  document.querySelectorAll('[data-login-card]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const loginInput = document.getElementById('login-user');
-      const passwordInput = document.getElementById('login-password');
+  document.querySelectorAll("[data-login-card]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const loginInput = document.getElementById("login-user");
+      const passwordInput = document.getElementById("login-password");
 
-      if (loginInput) loginInput.value = button.dataset.loginCard || '';
+      if (loginInput) loginInput.value = button.dataset.loginCard || "";
       passwordInput?.focus();
     });
   });
 
-  document.getElementById('quick-gustavo-btn')?.addEventListener('click', () => {
-    const loginInput = document.getElementById('login-user');
-    const passwordInput = document.getElementById('login-password');
+  document
+    .getElementById("quick-gustavo-btn")
+    ?.addEventListener("click", () => {
+      const loginInput = document.getElementById("login-user");
+      const passwordInput = document.getElementById("login-password");
 
-    if (loginInput) loginInput.value = ownerLogin;
-    passwordInput?.focus();
-  });
+      if (loginInput) loginInput.value = ownerLogin;
+      passwordInput?.focus();
+    });
 
-  document.getElementById('login-btn')?.addEventListener('click', async () => {
+  document.getElementById("login-btn")?.addEventListener("click", async () => {
     try {
-      const url = document.getElementById('onboarding-url')?.value?.trim() || DEFAULT_APPS_SCRIPT_URL;
-      const login = document.getElementById('login-user')?.value?.trim();
-      const password = document.getElementById('login-password')?.value || '';
+      const url =
+        document.getElementById("onboarding-url")?.value?.trim() ||
+        DEFAULT_APPS_SCRIPT_URL;
+      const login = document.getElementById("login-user")?.value?.trim();
+      const password = document.getElementById("login-password")?.value || "";
 
       if (!login || !password) {
-        toast('Informe login e senha.', 'error');
+        toast("Informe login e senha.", "error");
         return;
       }
 
@@ -262,28 +264,31 @@ export async function openOnboardingModal(onComplete = () => {}) {
 
       setAuthSession({
         token: result.token,
-        user: result.user
+        user: result.user,
       });
 
       resetDbConnection();
       closeModal();
-      toast(`Bem-vindo, ${result.user.name}.`, 'success');
+      toast(`Bem-vindo, ${result.user.name}.`, "success");
       onComplete(result.user);
     } catch (error) {
-      toast(error.message, 'error');
+      toast(error.message, "error");
     }
   });
 
-  document.getElementById('signup-btn')?.addEventListener('click', async () => {
+  document.getElementById("signup-btn")?.addEventListener("click", async () => {
     try {
-      const url = document.getElementById('onboarding-url')?.value?.trim() || DEFAULT_APPS_SCRIPT_URL;
-      const name = document.getElementById('signup-name')?.value?.trim();
-      const login = document.getElementById('signup-login')?.value?.trim();
-      const password = document.getElementById('signup-password')?.value || '';
-      const workspaceKey = document.getElementById('signup-workspace')?.value?.trim() || login;
+      const url =
+        document.getElementById("onboarding-url")?.value?.trim() ||
+        DEFAULT_APPS_SCRIPT_URL;
+      const name = document.getElementById("signup-name")?.value?.trim();
+      const login = document.getElementById("signup-login")?.value?.trim();
+      const password = document.getElementById("signup-password")?.value || "";
+      const workspaceKey =
+        document.getElementById("signup-workspace")?.value?.trim() || login;
 
       if (!name || !login || !password) {
-        toast('Preencha nome, login e senha.', 'error');
+        toast("Preencha nome, login e senha.", "error");
         return;
       }
 
@@ -293,20 +298,23 @@ export async function openOnboardingModal(onComplete = () => {}) {
         name,
         login,
         password,
-        workspaceKey
+        workspaceKey,
       });
 
       setAuthSession({
         token: result.token,
-        user: result.user
+        user: result.user,
       });
 
       resetDbConnection();
       closeModal();
-      toast(`Conta criada com sucesso. Bem-vindo, ${result.user.name}.`, 'success');
+      toast(
+        `Conta criada com sucesso. Bem-vindo, ${result.user.name}.`,
+        "success",
+      );
       onComplete(result.user);
     } catch (error) {
-      toast(error.message, 'error');
+      toast(error.message, "error");
     }
   });
 }

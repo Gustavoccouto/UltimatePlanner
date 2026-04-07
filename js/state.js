@@ -1,15 +1,16 @@
-import { getAll, bulkPut } from './services/storage.js';
-import { deriveAccountBalances } from './utils/calculations.js';
-import { getCurrentMonthKey } from './utils/dates.js';
+import { getAll, bulkPut } from "./services/storage.js";
+import { materializePlanningEntries } from "./services/planning.js";
+import { deriveAccountBalances } from "./utils/calculations.js";
+import { getCurrentMonthKey } from "./utils/dates.js";
 
 const listeners = new Set();
 
 export const state = {
-  route: 'dashboard',
+  route: "dashboard",
   ui: {
     loading: true,
     modal: null,
-    query: '',
+    query: "",
     offline: !navigator.onLine,
     syncing: false,
     selectedMonth: getCurrentMonthKey(),
@@ -30,7 +31,7 @@ export const state = {
     syncQueue: [],
     syncErrors: [],
     meta: [],
-  }
+  },
 };
 
 export function subscribe(listener) {
@@ -62,17 +63,29 @@ export function getEntity(name) {
 }
 
 export function getDerivedAccounts() {
-  return deriveAccountBalances(state.data.accounts.filter((a) => !a.isDeleted), state.data.transactions, state.ui.selectedMonth);
+  return deriveAccountBalances(
+    state.data.accounts.filter((account) => !account.isDeleted),
+    state.data.transactions,
+    state.ui.selectedMonth,
+  );
 }
 
 export async function loadState() {
   state.ui.loading = true;
   notify();
-  const keys = Object.keys(state.data);
-  const values = await Promise.all(keys.map((key) => getAll(key)));
-  keys.forEach((key, index) => {
-    state.data[key] = values[index] || [];
+
+  await hydrateStateData();
+  const planningResult = await materializePlanningEntries({
+    preferences: state.data.preferences,
+    installmentPlans: state.data.installmentPlans,
+    transactions: state.data.transactions,
+    creditCards: state.data.creditCards,
   });
+
+  if (planningResult.created || planningResult.updatedPlans) {
+    await hydrateStateData();
+  }
+
   state.ui.loading = false;
   notify();
 }
@@ -81,4 +94,12 @@ export async function replaceEntity(storeName, records) {
   await bulkPut(storeName, records, { skipInvalid: true });
   state.data[storeName] = await getAll(storeName);
   notify();
+}
+
+async function hydrateStateData() {
+  const keys = Object.keys(state.data);
+  const values = await Promise.all(keys.map((key) => getAll(key)));
+  keys.forEach((key, index) => {
+    state.data[key] = values[index] || [];
+  });
 }

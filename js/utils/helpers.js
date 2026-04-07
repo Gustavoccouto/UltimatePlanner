@@ -11,6 +11,6 @@ export function sumBy(items, getValue) {
   return items.reduce((sum, item) => sum + Number(getValue(item) || 0), 0);
 }
 
-export function sortByDateDesc(items, field = 'date') {
+export function sortByDateDesc(items, field = "date") {
   return [...items].sort((a, b) => new Date(b[field]) - new Date(a[field]));
 }
