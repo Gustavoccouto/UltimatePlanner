@@ -8,7 +8,13 @@ import {
 } from "../ui.js";
 import { currency, datePt } from "../utils/formatters.js";
 import { createId } from "../utils/ids.js";
-import { nowIso, formatDateInput, monthLabel } from "../utils/dates.js";
+import {
+  nowIso,
+  formatDateInput,
+  monthLabel,
+  addMonthsToDateInput,
+  compareDateInputs,
+} from "../utils/dates.js";
 import { validateTransaction } from "../utils/validators.js";
 import { putOne, getOne, getAll, bulkPut } from "../services/storage.js";
 import { enqueueSync } from "../services/sync.js";
@@ -38,7 +44,7 @@ export function renderTransactions() {
         !transaction.isDeleted &&
         isTransactionInMonth(transaction, state.ui.selectedMonth, cardsById),
     )
-    .sort((a, b) => new Date(b.date) - new Date(a.date));
+    .sort((a, b) => compareDateInputs(b.date, a.date));
   const accounts = getDerivedAccounts();
   const recurringRules = getRecurringRules(state.data.preferences).sort(
     (a, b) =>
@@ -47,9 +53,7 @@ export function renderTransactions() {
   );
   const debitPlans = getDebitInstallmentPlans(state.data.installmentPlans)
     .map((plan) => buildInstallmentPlanView(plan, state.data.transactions))
-    .sort(
-      (a, b) => new Date(b.purchaseDate || 0) - new Date(a.purchaseDate || 0),
-    );
+    .sort((a, b) => compareDateInputs(b.purchaseDate, a.purchaseDate));
 
   return `
     ${pageHeader(
@@ -219,29 +223,27 @@ export function renderTransactions() {
       </section>
 
       <section class="card p-4 md:p-6 overflow-hidden">
+        ${renderInstallmentExperienceStyles("debit")}
         <div class="section-head section-head-spaced">
           <div>
             <div class="text-sm text-slate-500">Parcelamentos</div>
             <div class="section-title">Parcelamentos no débito</div>
           </div>
-          <span class="badge badge-muted">${debitPlans.reduce((sum, plan) => sum + plan.remainingInstallments, 0)} parcela(s) pendente(s)</span>
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="badge badge-muted">${debitPlans.reduce((sum, plan) => sum + plan.remainingInstallments, 0)} parcela(s) pendente(s)</span>
+            ${
+              debitPlans.length
+                ? `<button class="table-action" id="expand-all-debit-plans-btn">Expandir tudo</button>
+                   <button class="table-action" id="collapse-all-debit-plans-btn">Recolher tudo</button>`
+                : ""
+            }
+          </div>
         </div>
-        <div class="overflow-auto">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Descrição</th>
-                <th>Conta</th>
-                <th>Total</th>
-                <th>Progresso</th>
-                <th>Início</th>
-                <th>Ações</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${debitPlans.map(renderDebitPlanRows).join("") || '<tr><td colspan="6" class="text-center text-slate-500 py-10">Nenhum parcelamento no débito cadastrado.</td></tr>'}
-            </tbody>
-          </table>
+        <div id="transactions-plans-root" class="installment-plan-grid">
+          ${
+            debitPlans.map(renderDebitPlanCard).join("") ||
+            `<div class="installment-empty-state">Nenhum parcelamento no débito cadastrado.</div>`
+          }
         </div>
       </section>
     </section>`;
@@ -287,32 +289,14 @@ export function bindTransactionsEvents() {
     );
   });
 
-  document.querySelectorAll("[data-plan-toggle]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const detailRow = document.querySelector(
-        `[data-plan-detail="${button.dataset.planToggle}"]`,
-      );
-      detailRow?.classList.toggle("hidden");
-      button.textContent = detailRow?.classList.contains("hidden")
-        ? "Expandir"
-        : "Recolher";
-    });
-  });
+  bindDebitPlanInteractions();
 
-  document.querySelectorAll("[data-plan-delete]").forEach((button) => {
-    button.addEventListener("click", () =>
-      confirmDeleteInstallmentPlan(button.dataset.planDelete),
-    );
-  });
-
-  document.querySelectorAll("[data-installment-action]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      await updateInstallmentStatus(
-        button.dataset.transactionId,
-        button.dataset.installmentAction,
-      );
-    });
-  });
+  document
+    .getElementById("expand-all-debit-plans-btn")
+    ?.addEventListener("click", () => setAllDebitPlansExpanded(true));
+  document
+    .getElementById("collapse-all-debit-plans-btn")
+    ?.addEventListener("click", () => setAllDebitPlansExpanded(false));
 }
 
 async function openTransactionModal(transactionId = null) {
@@ -497,6 +481,14 @@ async function saveTransaction(event) {
       syncStatus: "pending",
       isDeleted: false,
     };
+
+    const allowNegativeBalance = await confirmNegativeBalanceIfNeeded({
+      existingRecord: existing,
+      nextRecord: record,
+      actionLabel: existing ? "salvar esta edição" : "registrar esta transação",
+    });
+    if (!allowNegativeBalance) return;
+
     await putOne("transactions", record);
     await enqueueSync("transactions", record.id);
     await loadState();
@@ -634,7 +626,7 @@ async function saveDebitInstallmentPlan(event) {
           installmentStatus: INSTALLMENT_STATUS.pending,
           amount,
           category: payload.category || "",
-          date: addMonths(payload.purchaseDate, index),
+          date: addMonthsToDateInput(payload.purchaseDate, index),
           notes: payload.notes || "",
           status: "posted",
           isPaid: false,
@@ -646,6 +638,16 @@ async function saveDebitInstallmentPlan(event) {
         };
       },
     );
+
+    const allowNegativeBalance = await confirmNegativeBalanceIfNeeded({
+      nextRecord: {
+        type: "expense",
+        accountId: payload.accountId,
+        amount: totalAmount,
+      },
+      actionLabel: "criar este parcelamento no débito",
+    });
+    if (!allowNegativeBalance) return;
 
     await putOne("installmentPlans", plan);
     await enqueueSync("installmentPlans", plan.id);
@@ -663,21 +665,28 @@ async function saveDebitInstallmentPlan(event) {
   }
 }
 
+
 async function updateInstallmentStatus(transactionId, nextStatus) {
   try {
     const existing = await getOne("transactions", transactionId);
     if (!existing) return;
 
-    const status =
-      nextStatus === INSTALLMENT_STATUS.anticipated
-        ? INSTALLMENT_STATUS.anticipated
-        : INSTALLMENT_STATUS.paid;
     const timestamp = nowIso();
+    const today = formatDateInput();
+    const isAnticipation = nextStatus === INSTALLMENT_STATUS.anticipated;
     const updatedTransaction = {
       ...existing,
-      installmentStatus: status,
-      isPaid: status !== INSTALLMENT_STATUS.pending,
+      installmentStatus: isAnticipation
+        ? INSTALLMENT_STATUS.anticipated
+        : INSTALLMENT_STATUS.paid,
+      isPaid: true,
       paidAt: timestamp,
+      anticipatedAt: isAnticipation ? timestamp : existing.anticipatedAt,
+      anticipatedOriginalDate:
+        isAnticipation && !existing.anticipatedOriginalDate
+          ? existing.date
+          : existing.anticipatedOriginalDate,
+      date: isAnticipation ? today : existing.date,
       updatedAt: timestamp,
       version: (existing.version || 0) + 1,
       syncStatus: "pending",
@@ -685,11 +694,11 @@ async function updateInstallmentStatus(transactionId, nextStatus) {
 
     await putOne("transactions", updatedTransaction);
     await enqueueSync("transactions", updatedTransaction.id);
-    await syncInstallmentPlanRemaining(updatedTransaction.installmentPlanId);
+    await reconcileInstallmentPlan(updatedTransaction.installmentPlanId);
     await loadState();
     toast(
-      status === INSTALLMENT_STATUS.anticipated
-        ? "Parcela antecipada com sucesso."
+      isAnticipation
+        ? "Parcela adiantada e trazida para o mês atual."
         : "Parcela marcada como paga.",
       "success",
     );
@@ -698,26 +707,98 @@ async function updateInstallmentStatus(transactionId, nextStatus) {
   }
 }
 
-async function syncInstallmentPlanRemaining(planId) {
+async function reconcileInstallmentPlan(planId) {
   if (!planId) return;
+
   const plan = await getOne("installmentPlans", planId);
-  if (!plan || plan.isDeleted) return;
-  const transactions = await getAll("transactions");
-  const pendingCount = transactions.filter(
+  if (!plan) return;
+
+  const timestamp = nowIso();
+  const allTransactions = await getAll("transactions");
+  const relatedTransactions = allTransactions
+    .filter(
+      (transaction) =>
+        !transaction.isDeleted && transaction.installmentPlanId === planId,
+    )
+    .sort((a, b) => {
+      const byDate = compareDateInputs(a.date, b.date);
+      if (byDate !== 0) return byDate;
+      return Number(a.installmentNumber || 0) - Number(b.installmentNumber || 0);
+    });
+
+  if (!relatedTransactions.length) {
+    await putOne("installmentPlans", {
+      ...plan,
+      installmentCount: 0,
+      remainingInstallments: 0,
+      totalAmount: 0,
+      isDeleted: true,
+      updatedAt: timestamp,
+      version: (plan.version || 0) + 1,
+      syncStatus: "pending",
+    });
+    await enqueueSync("installmentPlans", plan.id);
+    expandedDebitPlans.delete(plan.id);
+    return;
+  }
+
+  const totalInstallments = relatedTransactions.length;
+  const resequenced = [];
+  for (let index = 0; index < relatedTransactions.length; index += 1) {
+    const transaction = relatedTransactions[index];
+    const nextNumber = index + 1;
+    const nextDescription = `${plan.description} ${nextNumber}/${totalInstallments}`;
+    const needsUpdate =
+      Number(transaction.installmentNumber || 0) !== nextNumber ||
+      Number(transaction.installmentTotal || 0) !== totalInstallments ||
+      transaction.description !== nextDescription;
+
+    if (needsUpdate) {
+      resequenced.push({
+        ...transaction,
+        installmentNumber: nextNumber,
+        installmentTotal: totalInstallments,
+        description: nextDescription,
+        updatedAt: timestamp,
+        version: (transaction.version || 0) + 1,
+        syncStatus: "pending",
+      });
+    }
+  }
+
+  if (resequenced.length) {
+    await bulkPut("transactions", resequenced);
+    await Promise.all(
+      resequenced.map((transaction) =>
+        enqueueSync("transactions", transaction.id),
+      ),
+    );
+  }
+
+  const normalizedTransactions = relatedTransactions.map(
+    (transaction) => resequenced.find((item) => item.id === transaction.id) || transaction,
+  );
+  const remainingInstallments = normalizedTransactions.filter(
     (transaction) =>
-      !transaction.isDeleted &&
-      transaction.installmentPlanId === planId &&
       getInstallmentStatus(transaction) === INSTALLMENT_STATUS.pending,
   ).length;
-
-  if (pendingCount === Number(plan.remainingInstallments || 0)) return;
+  const totalAmount = Math.round(
+    normalizedTransactions.reduce(
+      (sum, transaction) => sum + Number(transaction.amount || 0),
+      0,
+    ) * 100,
+  ) / 100;
 
   await putOne("installmentPlans", {
     ...plan,
-    remainingInstallments: pendingCount,
-    updatedAt: nowIso(),
+    purchaseDate: normalizedTransactions[0]?.date || plan.purchaseDate,
+    installmentCount: totalInstallments,
+    remainingInstallments,
+    totalAmount,
+    updatedAt: timestamp,
     version: (plan.version || 0) + 1,
     syncStatus: "pending",
+    isDeleted: false,
   });
   await enqueueSync("installmentPlans", plan.id);
 }
@@ -740,7 +821,7 @@ function confirmDelete(transactionId) {
       };
       await putOne("transactions", record);
       await enqueueSync("transactions", record.id);
-      await syncInstallmentPlanRemaining(existing.installmentPlanId);
+      await reconcileInstallmentPlan(existing.installmentPlanId);
       await loadState();
       toast("Transação excluída.", "success");
     },
@@ -809,73 +890,517 @@ function confirmDeleteInstallmentPlan(planId) {
         );
       }
 
+      expandedDebitPlans.delete(planId);
       await loadState();
       toast("Parcelamento excluído.", "success");
     },
   });
 }
 
-function renderDebitPlanRows(plan) {
-  const account = state.data.accounts.find(
-    (item) => item.id === plan.accountId,
-  );
+async function openDebitInstallmentEditModal(transactionId) {
+  const existing = transactionId ? await getOne("transactions", transactionId) : null;
+  if (!existing || existing.isDeleted || !existing.installmentPlanId) return;
+
+  const plan = await getOne("installmentPlans", existing.installmentPlanId);
+  const account = state.data.accounts.find((item) => item.id === existing.accountId);
+
+  openModal(`
+    <div class="flex items-center justify-between mb-6"><div><div class="text-2xl font-bold">Editar parcela</div><div class="text-sm text-slate-500 mt-1">Ajuste apenas esta parcela sem recriar o parcelamento.</div></div><button id="close-modal" class="action-btn">Fechar</button></div>
+    <form id="debit-installment-edit-form" class="grid md:grid-cols-2 gap-4">
+      <input type="hidden" name="id" value="${existing.id}" />
+      <div class="md:col-span-2"><label class="text-sm font-semibold mb-2 block">Descrição</label><input name="description" class="field" value="${existing.description || plan?.description || ""}" required /></div>
+      <div><label class="text-sm font-semibold mb-2 block">Conta</label><input class="field" value="${account?.name || "Conta removida"}" disabled /></div>
+      <div><label class="text-sm font-semibold mb-2 block">Categoria</label><input name="category" class="field" value="${existing.category || ""}" /></div>
+      <div><label class="text-sm font-semibold mb-2 block">Valor</label><input name="amount" type="number" min="0.01" step="0.01" class="field" value="${existing.amount || 0}" required /></div>
+      <div><label class="text-sm font-semibold mb-2 block">Data</label><input name="date" type="date" class="field" value="${existing.date || formatDateInput()}" required /></div>
+      <div class="md:col-span-2"><label class="text-sm font-semibold mb-2 block">Observações</label><textarea name="notes" class="textarea" rows="3">${existing.notes || ""}</textarea></div>
+      <div class="md:col-span-2 flex justify-end gap-3 pt-2"><button type="button" id="cancel-debit-installment-edit" class="action-btn">Cancelar</button><button class="action-btn action-btn-primary" type="submit">Salvar parcela</button></div>
+    </form>
+  `);
+
+  document.getElementById("close-modal")?.addEventListener("click", closeModal);
+  document
+    .getElementById("cancel-debit-installment-edit")
+    ?.addEventListener("click", closeModal);
+  document
+    .getElementById("debit-installment-edit-form")
+    ?.addEventListener("submit", saveDebitInstallmentEdit);
+}
+
+async function saveDebitInstallmentEdit(event) {
+  event.preventDefault();
+  try {
+    const payload = Object.fromEntries(
+      new FormData(event.currentTarget).entries(),
+    );
+    const existing = payload.id ? await getOne("transactions", payload.id) : null;
+    if (!existing || existing.isDeleted || !existing.installmentPlanId) {
+      throw new Error("Parcela não encontrada para edição.");
+    }
+
+    const amount = Number(payload.amount);
+    if (amount <= 0) {
+      throw new Error("Informe um valor maior que zero para a parcela.");
+    }
+
+    const timestamp = nowIso();
+    const updatedTransaction = {
+      ...existing,
+      description: payload.description,
+      category: payload.category || "",
+      amount,
+      date: payload.date,
+      notes: payload.notes || "",
+      updatedAt: timestamp,
+      version: (existing.version || 0) + 1,
+      syncStatus: "pending",
+    };
+
+    const allowNegativeBalance = await confirmNegativeBalanceIfNeeded({
+      existingRecord: existing,
+      nextRecord: updatedTransaction,
+      actionLabel: "salvar esta edição da parcela",
+    });
+    if (!allowNegativeBalance) return;
+
+    await putOne("transactions", updatedTransaction);
+    await enqueueSync("transactions", existing.id);
+    await reconcileInstallmentPlan(existing.installmentPlanId);
+    await loadState();
+    closeModal();
+    toast("Parcela atualizada com sucesso.", "success");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function confirmDeleteInstallment(transactionId) {
+  confirmDialog({
+    title: "Excluir parcela",
+    message:
+      "Somente esta parcela será removida. O plano será recalculado automaticamente.",
+    confirmText: "Excluir parcela",
+    onConfirm: async () => {
+      const existing = await getOne("transactions", transactionId);
+      if (!existing) return;
+
+      await putOne("transactions", {
+        ...existing,
+        isDeleted: true,
+        updatedAt: nowIso(),
+        version: (existing.version || 0) + 1,
+        syncStatus: "pending",
+      });
+      await enqueueSync("transactions", existing.id);
+      await reconcileInstallmentPlan(existing.installmentPlanId);
+      await loadState();
+      toast("Parcela excluída.", "success");
+    },
+  });
+}
+
+const expandedDebitPlans = new Set();
+
+function bindDebitPlanInteractions() {
+  const root = document.getElementById("transactions-plans-root");
+  if (!root) return;
+
+  root.addEventListener("click", async (event) => {
+    const toggleButton = event.target.closest("[data-plan-toggle]");
+    if (toggleButton) {
+      event.preventDefault();
+      toggleDebitPlan(toggleButton.dataset.planToggle, root);
+      return;
+    }
+
+    const editButton = event.target.closest("[data-installment-edit]");
+    if (editButton) {
+      event.preventDefault();
+      await openDebitInstallmentEditModal(editButton.dataset.installmentEdit);
+      return;
+    }
+
+    const installmentDeleteButton = event.target.closest(
+      "[data-installment-delete]",
+    );
+    if (installmentDeleteButton) {
+      event.preventDefault();
+      confirmDeleteInstallment(installmentDeleteButton.dataset.installmentDelete);
+      return;
+    }
+
+    const deleteButton = event.target.closest("[data-plan-delete]");
+    if (deleteButton) {
+      event.preventDefault();
+      confirmDeleteInstallmentPlan(deleteButton.dataset.planDelete);
+      return;
+    }
+
+    const actionButton = event.target.closest("[data-installment-action]");
+    if (actionButton) {
+      event.preventDefault();
+      await updateInstallmentStatus(
+        actionButton.dataset.transactionId,
+        actionButton.dataset.installmentAction,
+      );
+    }
+  });
+}
+
+function toggleDebitPlan(planId, root) {
+  if (!planId) return;
+  const expanded = !expandedDebitPlans.has(planId);
+  if (expanded) {
+    expandedDebitPlans.add(planId);
+  } else {
+    expandedDebitPlans.delete(planId);
+  }
+  syncPlanCardState(root, planId, expanded);
+}
+
+function setAllDebitPlansExpanded(expanded) {
+  const root = document.getElementById("transactions-plans-root");
+  if (!root) return;
+  const ids = Array.from(root.querySelectorAll("[data-plan-card]"))
+    .map((card) => card.dataset.planCard)
+    .filter(Boolean);
+
+  ids.forEach((id) => {
+    if (expanded) {
+      expandedDebitPlans.add(id);
+    } else {
+      expandedDebitPlans.delete(id);
+    }
+    syncPlanCardState(root, id, expanded);
+  });
+}
+
+function syncPlanCardState(root, planId, expanded) {
+  const card = root?.querySelector(`[data-plan-card="${planId}"]`);
+  if (!card) return;
+
+  const content = card.querySelector("[data-plan-content]");
+  const label = card.querySelector("[data-plan-label]");
+  const toggle = card.querySelector("[data-plan-toggle]");
+
+  card.classList.toggle("is-open", expanded);
+  if (content) {
+    content.hidden = !expanded;
+    content.setAttribute("aria-hidden", String(!expanded));
+  }
+  if (toggle) toggle.setAttribute("aria-expanded", String(expanded));
+  if (label) {
+    label.textContent = expanded ? "Recolher detalhes" : "Ver parcelas";
+  }
+}
+
+function renderDebitPlanCard(plan) {
+  const account = state.data.accounts.find((item) => item.id === plan.accountId);
+  const isExpanded = expandedDebitPlans.has(plan.id);
+
   return `
-    <tr>
-      <td>
-        <div class="font-semibold">${plan.description}</div>
-        <div class="text-sm text-slate-500">${plan.category || "Sem categoria"}</div>
-      </td>
-      <td>${account?.name || "Conta removida"}</td>
-      <td>${currency(plan.totalAmount)}</td>
-      <td>
-        <div class="text-sm font-semibold text-slate-900">${plan.settledCount}/${plan.installmentCount}</div>
-        <div class="progress-rail mt-2"><span style="width:${plan.progressPercent}%"></span></div>
-      </td>
-      <td>${datePt(plan.purchaseDate)}</td>
-      <td>
-        <div class="flex gap-2 flex-wrap">
-          <button class="table-action" data-plan-toggle="${plan.id}">Expandir</button>
-          <button class="table-action table-action-danger" data-plan-delete="${plan.id}">Excluir</button>
+    <article class="installment-plan-card ${isExpanded ? "is-open" : ""}" data-plan-card="${plan.id}">
+      <button
+        type="button"
+        class="installment-plan-summary"
+        data-plan-toggle="${plan.id}"
+        aria-expanded="${isExpanded ? "true" : "false"}"
+      >
+        <div class="installment-plan-summary-main">
+          <span class="installment-plan-eyebrow">Parcelamento no débito • ${account?.name || "Conta removida"}</span>
+          <h3>${plan.description}</h3>
+          <p>${plan.category || "Sem categoria"} • início ${datePt(plan.purchaseDate)}</p>
         </div>
-      </td>
-    </tr>
-    <tr data-plan-detail="${plan.id}" class="hidden">
-      <td colspan="6">
-        <div class="rounded-[24px] border border-slate-100 bg-slate-50/80 p-4 space-y-3">
-          <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-            <div>
-              <div class="font-semibold text-slate-900">${plan.description}</div>
-              <div class="text-sm text-slate-500">${plan.remainingInstallments} parcela(s) pendente(s) • ${currency(plan.totalAmount)}</div>
-            </div>
-            <span class="badge badge-muted">Progresso ${plan.progressPercent}%</span>
+        <div class="installment-plan-kpis">
+          <div class="installment-plan-kpi">
+            <span>Total</span>
+            <strong>${currency(plan.totalAmount)}</strong>
           </div>
+          <div class="installment-plan-kpi">
+            <span>Pendentes</span>
+            <strong>${plan.remainingInstallments}</strong>
+          </div>
+          <div class="installment-plan-kpi">
+            <span>Progresso</span>
+            <strong>${plan.settledCount}/${plan.installmentCount}</strong>
+          </div>
+        </div>
+        <span class="installment-plan-toggle-pill">
+          <span data-plan-label>${isExpanded ? "Recolher detalhes" : "Ver parcelas"}</span>
+          <i class="fa-solid fa-chevron-down"></i>
+        </span>
+      </button>
+
+      <div class="installment-plan-progress">
+        <span style="width:${clampPercent(plan.progressPercent)}%"></span>
+      </div>
+
+      <div class="installment-plan-content" data-plan-content ${isExpanded ? "" : "hidden"} aria-hidden="${isExpanded ? "false" : "true"}">
+        <div class="installment-plan-meta-grid">
+          <div class="installment-plan-meta-card">
+            <span>Valor médio</span>
+            <strong>${currency(plan.installments?.[0]?.amount || 0)}</strong>
+          </div>
+          <div class="installment-plan-meta-card">
+            <span>Parcelas totais</span>
+            <strong>${plan.installmentCount}</strong>
+          </div>
+          <div class="installment-plan-meta-card">
+            <span>Última parcela</span>
+            <strong>${plan.installments?.length ? datePt(plan.installments[plan.installments.length - 1].date) : "—"}</strong>
+          </div>
+        </div>
+
+        <div class="installment-plan-timeline">
           ${
             plan.installments
               .map(
                 (installment) => `
-                  <div class="rounded-[18px] border border-slate-200 bg-white p-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                  <div class="installment-timeline-item">
                     <div>
-                      <div class="font-semibold text-slate-900">Parcela ${installment.installmentNumber}/${installment.installmentTotal}</div>
-                      <div class="text-sm text-slate-500">${datePt(installment.date)} • ${currency(installment.amount)}</div>
+                      <div class="installment-timeline-title">Parcela ${installment.installmentNumber}/${installment.installmentTotal}</div>
+                      <div class="installment-timeline-subtitle">${datePt(installment.date)} • ${currency(installment.amount)}${installment.anticipatedAt ? " • antecipada para este mês" : ""}</div>
                     </div>
-                    <div class="flex flex-wrap items-center gap-2">
+                    <div class="installment-timeline-actions">
                       <span class="badge ${getInstallmentStatusBadge(installment.computedStatus)}">${getInstallmentStatusLabel(installment.computedStatus)}</span>
-                      ${
-                        installment.computedStatus ===
-                        INSTALLMENT_STATUS.pending
-                          ? `<button class="table-action" data-installment-action="${INSTALLMENT_STATUS.paid}" data-transaction-id="${installment.id}">Marcar paga</button>
-                             <button class="table-action" data-installment-action="${INSTALLMENT_STATUS.anticipated}" data-transaction-id="${installment.id}">Adiantar</button>`
-                          : ""
-                      }
+                      <div class="installment-inline-buttons">
+                        ${
+                          installment.computedStatus === INSTALLMENT_STATUS.pending
+                            ? `<button class="table-action" data-installment-action="${INSTALLMENT_STATUS.paid}" data-transaction-id="${installment.id}">Marcar paga</button>
+                               <button class="table-action" data-installment-action="${INSTALLMENT_STATUS.anticipated}" data-transaction-id="${installment.id}">Adiantar</button>`
+                            : ""
+                        }
+                        <button class="table-action" data-installment-edit="${installment.id}">Editar</button>
+                        <button class="table-action table-action-danger" data-installment-delete="${installment.id}">Excluir</button>
+                      </div>
                     </div>
                   </div>`,
               )
               .join("") ||
-            '<div class="text-sm text-slate-500">Nenhuma parcela encontrada.</div>'
+            '<div class="installment-empty-inline">Nenhuma parcela encontrada.</div>'
           }
         </div>
-      </td>
-    </tr>`;
+
+        <div class="installment-plan-footer">
+          <button class="table-action table-action-danger" data-plan-delete="${plan.id}">Excluir parcelamento</button>
+        </div>
+      </div>
+    </article>`;
+}
+
+function renderInstallmentExperienceStyles(scope) {
+  return `
+    <style id="installment-experience-styles-${scope}">
+      .installment-plan-grid {
+        display: grid;
+        gap: 16px;
+      }
+
+      .installment-plan-card {
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 28px;
+        background:
+          radial-gradient(circle at top right, rgba(99, 102, 241, 0.12), transparent 30%),
+          linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,250,252,0.92));
+        box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+        overflow: hidden;
+        transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+      }
+
+      .installment-plan-card:hover,
+      .installment-plan-card.is-open {
+        transform: translateY(-2px);
+        box-shadow: 0 24px 54px rgba(15, 23, 42, 0.12);
+        border-color: rgba(99, 102, 241, 0.24);
+      }
+
+      .installment-plan-summary {
+        width: 100%;
+        border: 0;
+        background: transparent;
+        display: grid;
+        grid-template-columns: minmax(0, 1.4fr) minmax(240px, 1fr) auto;
+        gap: 18px;
+        padding: 22px;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .installment-plan-summary-main h3 {
+        margin: 8px 0 6px;
+        font-size: 1.1rem;
+        font-weight: 800;
+        color: #0f172a;
+      }
+
+      .installment-plan-summary-main p,
+      .installment-plan-eyebrow,
+      .installment-plan-meta-card span,
+      .installment-timeline-subtitle {
+        color: #64748b;
+      }
+
+      .installment-plan-eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .installment-plan-kpis {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .installment-plan-kpi,
+      .installment-plan-meta-card {
+        border-radius: 20px;
+        background: rgba(255,255,255,0.76);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        padding: 14px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .installment-plan-kpi span {
+        font-size: 0.78rem;
+        color: #64748b;
+      }
+
+      .installment-plan-kpi strong,
+      .installment-plan-meta-card strong,
+      .installment-timeline-title {
+        color: #0f172a;
+        font-weight: 800;
+      }
+
+      .installment-plan-toggle-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        align-self: start;
+        padding: 12px 16px;
+        border-radius: 999px;
+        background: #0f172a;
+        color: #fff;
+        font-size: 0.86rem;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .installment-plan-card.is-open .installment-plan-toggle-pill i {
+        transform: rotate(180deg);
+      }
+
+      .installment-plan-toggle-pill i {
+        transition: transform 0.18s ease;
+      }
+
+      .installment-plan-progress {
+        height: 8px;
+        background: rgba(226, 232, 240, 0.9);
+        margin: 0 22px;
+        border-radius: 999px;
+        overflow: hidden;
+      }
+
+      .installment-plan-progress span {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #4f46e5, #22c55e);
+      }
+
+      .installment-plan-content {
+        padding: 18px 22px 22px;
+        display: grid;
+        gap: 18px;
+        border-top: 1px solid rgba(226, 232, 240, 0.9);
+        background: linear-gradient(180deg, rgba(248,250,252,0.2), rgba(248,250,252,0.82));
+      }
+
+      .installment-plan-content[hidden] {
+        display: none !important;
+      }
+
+      .installment-plan-meta-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .installment-plan-timeline {
+        display: grid;
+        gap: 12px;
+      }
+
+      .installment-timeline-item {
+        border-radius: 22px;
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        background: rgba(255,255,255,0.92);
+        padding: 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .installment-timeline-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .installment-inline-buttons {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .installment-plan-footer {
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      .installment-empty-state,
+      .installment-empty-inline {
+        border: 1px dashed rgba(148, 163, 184, 0.4);
+        border-radius: 22px;
+        padding: 26px;
+        text-align: center;
+        color: #64748b;
+        background: rgba(248,250,252,0.7);
+      }
+
+      @media (max-width: 980px) {
+        .installment-plan-summary {
+          grid-template-columns: 1fr;
+        }
+
+        .installment-plan-meta-grid,
+        .installment-plan-kpis {
+          grid-template-columns: 1fr;
+        }
+
+        .installment-timeline-item {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+    </style>`;
+}
+
+function clampPercent(value) {
+  return Math.max(0, Math.min(100, Number(value || 0)));
 }
 
 function statusLabelForTransaction(transaction) {
@@ -896,10 +1421,121 @@ function statusBadgeForTransaction(transaction) {
       : "badge-warning";
 }
 
-function addMonths(dateInput, months) {
-  const date = new Date(dateInput);
-  date.setMonth(date.getMonth() + months);
-  return date.toISOString().slice(0, 10);
+
+function createAccountDeltaMap() {
+  return new Map();
+}
+
+function appendAccountDelta(deltaMap, accountId, amount) {
+  if (!accountId) return;
+  const numericAmount = Number(amount || 0);
+  if (!numericAmount) return;
+  deltaMap.set(accountId, (deltaMap.get(accountId) || 0) + numericAmount);
+}
+
+function getTransactionAccountEffects(transaction) {
+  const effects = createAccountDeltaMap();
+  if (!transaction || transaction.isDeleted) return effects;
+
+  const amount = Number(transaction.amount || 0);
+  if (!amount) return effects;
+
+  switch (transaction.type) {
+    case "income":
+      appendAccountDelta(effects, transaction.accountId, amount);
+      break;
+    case "expense":
+      appendAccountDelta(effects, transaction.accountId, -amount);
+      break;
+    case "adjustment":
+      appendAccountDelta(effects, transaction.accountId, amount);
+      break;
+    case "transfer":
+      appendAccountDelta(effects, transaction.accountId, -amount);
+      appendAccountDelta(effects, transaction.destinationAccountId, amount);
+      break;
+    default:
+      break;
+  }
+
+  return effects;
+}
+
+function roundMoney(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function getProjectedNegativeBalanceWarnings(existingRecord, nextRecord) {
+  const accounts = getDerivedAccounts().filter((account) => !account.isDeleted);
+  const balancesById = new Map(
+    accounts.map((account) => [account.id, Number(account.derivedBalance || 0)]),
+  );
+  const accountNamesById = new Map(accounts.map((account) => [account.id, account.name]));
+  const deltaMap = createAccountDeltaMap();
+
+  for (const [accountId, effect] of getTransactionAccountEffects(existingRecord)) {
+    appendAccountDelta(deltaMap, accountId, -effect);
+  }
+  for (const [accountId, effect] of getTransactionAccountEffects(nextRecord)) {
+    appendAccountDelta(deltaMap, accountId, effect);
+  }
+
+  return [...deltaMap.entries()]
+    .map(([accountId, delta]) => {
+      const currentBalance = Number(balancesById.get(accountId) || 0);
+      const projectedBalance = roundMoney(currentBalance + Number(delta || 0));
+      return {
+        accountId,
+        accountName: accountNamesById.get(accountId) || "Conta",
+        delta: roundMoney(delta),
+        currentBalance: roundMoney(currentBalance),
+        projectedBalance,
+      };
+    })
+    .filter((item) => item.delta < 0 && item.projectedBalance < 0);
+}
+
+async function confirmNegativeBalanceIfNeeded({
+  existingRecord = null,
+  nextRecord = null,
+  actionLabel = "salvar esta movimentação",
+}) {
+  const warnings = getProjectedNegativeBalanceWarnings(existingRecord, nextRecord);
+  if (!warnings.length) return true;
+
+  const message = warnings
+    .map(
+      (warning) =>
+        `<strong>${warning.accountName}</strong>: saldo atual ${currency(
+          warning.currentBalance,
+        )} → saldo projetado ${currency(warning.projectedBalance)}`,
+    )
+    .join("<br>");
+
+  return new Promise((resolve) => {
+    confirmDialog({
+      title: "Conta ficará negativa",
+      message: `Ao ${actionLabel}, a conta pode ficar negativa.<br><br>${message}<br><br>Deseja continuar mesmo assim?`,
+      confirmText: "Continuar mesmo negativo",
+      tone: "danger",
+      onConfirm: async () => {
+        resolve(true);
+      },
+    });
+
+    document.getElementById("confirm-cancel-btn")?.addEventListener(
+      "click",
+      () => resolve(false),
+      { once: true },
+    );
+    document.querySelector("#modal-root .modal-backdrop")?.addEventListener(
+      "click",
+      (event) => {
+        if (event.target.classList.contains("modal-backdrop")) resolve(false);
+      },
+      { once: true },
+    );
+  });
 }
 
 function selected(value, current) {

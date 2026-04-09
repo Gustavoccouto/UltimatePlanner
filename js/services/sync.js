@@ -2,12 +2,12 @@ import { getAll, putOne, bulkPut, isValidStoreRecord } from "./storage.js";
 import { SheetsService } from "./sheets.js";
 import { nowIso } from "../utils/dates.js";
 import { createId } from "../utils/ids.js";
-import { ENTITY_STORES } from "../config.js";
+import { APP_CONFIG, ENTITY_STORES } from "../config.js";
 
 const REMOTE_SYNCABLE = ENTITY_STORES.filter(
   (name) => !["syncQueue", "syncErrors", "meta"].includes(name),
 );
-const REMOTE_BATCH_SIZE = 1;
+const REMOTE_BATCH_SIZE = Math.max(1, Number(APP_CONFIG.maxSyncBatchSize || 1));
 
 async function logSyncError(entity, recordId, message) {
   await putOne(
@@ -24,6 +24,10 @@ async function logSyncError(entity, recordId, message) {
   );
 }
 
+function getQueueIdentity(item) {
+  return `${item.entity}::${item.recordId}::${item.action || "upsert"}`;
+}
+
 export async function enqueueSync(storeName, recordId, action = "upsert") {
   if (!recordId) {
     await logSyncError(
@@ -34,7 +38,24 @@ export async function enqueueSync(storeName, recordId, action = "upsert") {
     throw new Error(`Não foi possível sincronizar "${storeName}": id ausente.`);
   }
 
-  await putOne("syncQueue", {
+  const queue = await getAll("syncQueue");
+  const existing = queue.find(
+    (item) =>
+      item.entity === storeName &&
+      item.recordId === recordId &&
+      (item.action || "upsert") === action &&
+      item.syncStatus !== "done",
+  );
+
+  if (existing) {
+    return putOne("syncQueue", {
+      ...existing,
+      syncStatus: "pending",
+      updatedAt: nowIso(),
+    });
+  }
+
+  return putOne("syncQueue", {
     id: createId("sync"),
     entity: storeName,
     recordId,
@@ -51,12 +72,38 @@ export async function hasPendingSync() {
 }
 
 export async function processSyncQueue() {
-  const queue = (await getAll("syncQueue")).filter(
-    (item) => item.syncStatus !== "done",
-  );
-  if (!queue.length) return { processed: 0, failed: 0 };
+  const queue = (await getAll("syncQueue"))
+    .filter((item) => item.syncStatus !== "done")
+    .sort(
+      (a, b) =>
+        new Date(a.updatedAt || a.createdAt || 0) -
+        new Date(b.updatedAt || b.createdAt || 0),
+    );
 
-  const grouped = queue.reduce((acc, item) => {
+  if (!queue.length) return { processed: 0, failed: 0, cleaned: 0 };
+
+  const latestItems = new Map();
+  for (const item of queue) {
+    latestItems.set(getQueueIdentity(item), item);
+  }
+
+  const dedupedQueue = [...latestItems.values()];
+  const latestIds = new Set(dedupedQueue.map((item) => item.id));
+  const duplicatedItems = queue.filter((item) => !latestIds.has(item.id));
+
+  if (duplicatedItems.length) {
+    await bulkPut(
+      "syncQueue",
+      duplicatedItems.map((item) => ({
+        ...item,
+        syncStatus: "done",
+        updatedAt: nowIso(),
+      })),
+      { skipInvalid: true },
+    );
+  }
+
+  const grouped = dedupedQueue.reduce((acc, item) => {
     if (!item?.entity) return acc;
     if (!acc[item.entity]) acc[item.entity] = [];
     acc[item.entity].push(item);
@@ -69,11 +116,11 @@ export async function processSyncQueue() {
   for (const [entity, items] of Object.entries(grouped)) {
     const records = await getAll(entity);
     const recordMap = new Map(
-      records.filter(isValidStoreRecord).map((r) => [r.id, r]),
+      records.filter(isValidStoreRecord).map((record) => [record.id, record]),
     );
 
-    for (let i = 0; i < items.length; i += REMOTE_BATCH_SIZE) {
-      const chunk = items.slice(i, i + REMOTE_BATCH_SIZE);
+    for (let index = 0; index < items.length; index += REMOTE_BATCH_SIZE) {
+      const chunk = items.slice(index, index + REMOTE_BATCH_SIZE);
       const validPayload = [];
       const doneWithoutSync = [];
 
@@ -92,6 +139,7 @@ export async function processSyncQueue() {
           });
           continue;
         }
+
         validPayload.push({ ...record, syncUpdatedAt: nowIso() });
       }
 
@@ -140,7 +188,7 @@ export async function processSyncQueue() {
     }
   }
 
-  return { processed, failed };
+  return { processed, failed, cleaned: duplicatedItems.length };
 }
 
 function isRemoteNewer(localRecord, remoteRecord) {
@@ -196,16 +244,18 @@ export async function pullRemoteIntoLocal() {
 
 export async function requeueFailedSync() {
   const queue = await getAll("syncQueue");
-  const failed = queue.filter((item) => item.syncStatus === "failed");
-  if (!failed.length) return 0;
+  const failedItems = queue.filter((item) => item.syncStatus === "failed");
+  if (!failedItems.length) return 0;
+
   await bulkPut(
     "syncQueue",
-    failed.map((item) => ({
+    failedItems.map((item) => ({
       ...item,
       syncStatus: "pending",
       updatedAt: nowIso(),
     })),
     { skipInvalid: true },
   );
-  return failed.length;
+
+  return failedItems.length;
 }

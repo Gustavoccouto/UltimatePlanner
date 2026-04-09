@@ -95,13 +95,41 @@ export function resetDbConnection() {
 
 export async function getDb() {
   const scopedName = getScopedDbName();
-
   if (!dbPromise || currentDbName !== scopedName) {
     dbPromise = openDb(scopedName);
     currentDbName = scopedName;
   }
-
   return dbPromise;
+}
+
+export async function deleteCurrentWorkspaceDb() {
+  const dbName = getScopedDbName();
+
+  try {
+    const db = await dbPromise;
+    db?.close?.();
+  } catch {
+    // noop
+  }
+
+  resetDbConnection();
+
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(dbName);
+
+    request.onsuccess = () => resolve(true);
+    request.onerror = () =>
+      reject(
+        request.error ||
+          new Error("Não foi possível excluir a base local do workspace."),
+      );
+    request.onblocked = () =>
+      reject(
+        new Error(
+          "A base local está em uso por outra aba. Feche as outras abas do app e tente novamente.",
+        ),
+      );
+  });
 }
 
 export async function getAll(storeName) {
@@ -128,7 +156,6 @@ export async function getOne(storeName, id) {
 export async function putOne(storeName, record, options = {}) {
   const normalized = normalizeRecord(storeName, record, options);
   const db = await getDb();
-
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, "readwrite");
     tx.objectStore(storeName).put(normalized);
@@ -143,7 +170,6 @@ export async function putOne(storeName, record, options = {}) {
 export async function bulkPut(storeName, records = [], options = {}) {
   const { skipInvalid = false, allowGenerateId = false } = options;
   const db = await getDb();
-
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, "readwrite");
     const store = tx.objectStore(storeName);

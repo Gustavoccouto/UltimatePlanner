@@ -6,23 +6,25 @@ import {
   isOnOrBeforeMonth,
   addMonthsToMonthKey,
   monthLabel,
+  parseDateInput,
+  compareDateInputs,
 } from "./dates.js";
 
 export function getCardBillingMonth(purchaseDate, closingDay, dueDay) {
   if (!purchaseDate) return "";
-  const date = new Date(purchaseDate);
-  if (Number.isNaN(date.getTime())) return "";
+  const purchase = parseDateInput(purchaseDate);
+  if (!purchase) return "";
 
   const closing = Math.min(Math.max(Number(closingDay || 31), 1), 31);
   const due = Math.min(Math.max(Number(dueDay || 1), 1), 31);
-  const purchaseDay = date.getDate();
+  const purchaseDay = purchase.getDate();
   const dueOffset = due > closing ? 0 : 1;
   const closingOffset = purchaseDay > closing ? 1 : 0;
 
-  date.setDate(1);
-  date.setMonth(date.getMonth() + dueOffset + closingOffset);
-
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+  return addMonthsToMonthKey(
+    toMonthKey(purchase),
+    dueOffset + closingOffset,
+  );
 }
 
 export function getBillingMonthDate(monthKey, dueDay) {
@@ -43,10 +45,11 @@ export function getCardsById(cards = []) {
 export function getTransactionCompetenceMonth(transaction, cardsById = {}) {
   if (!transaction || transaction.isDeleted) return "";
   if (transaction.type === TRANSACTION_TYPES.cardExpense) {
+    if (transaction.billingMonth) return transaction.billingMonth;
+
     const card = cardsById[transaction.cardId];
     return (
       getCardBillingMonth(transaction.date, card?.closingDay, card?.dueDay) ||
-      transaction.billingMonth ||
       toMonthKey(transaction.date)
     );
   }
@@ -242,11 +245,11 @@ export function dashboardSummary({
         t.type,
       ),
     )
-    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .sort((a, b) => compareDateInputs(b.date, a.date))
     .slice(0, 5);
   const recentIncomes = activeTx
     .filter((t) => t.type === TRANSACTION_TYPES.income)
-    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .sort((a, b) => compareDateInputs(b.date, a.date))
     .slice(0, 5);
 
   return {

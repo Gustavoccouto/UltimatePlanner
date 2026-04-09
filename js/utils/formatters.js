@@ -1,3 +1,5 @@
+import { parseDateInput } from "./dates.js";
+
 export function currency(value = 0, currencyCode = "BRL") {
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",
@@ -8,7 +10,9 @@ export function currency(value = 0, currencyCode = "BRL") {
 
 export function datePt(value) {
   if (!value) return "--";
-  return new Intl.DateTimeFormat("pt-BR").format(new Date(value));
+  const parsed = parseDateInput(value);
+  if (!parsed) return "--";
+  return new Intl.DateTimeFormat("pt-BR").format(parsed);
 }
 
 export function percent(value = 0) {

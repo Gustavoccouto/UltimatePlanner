@@ -4,7 +4,10 @@ import { createId } from "../utils/ids.js";
 import {
   nowIso,
   formatDateInput,
-  addMonthsToMonthKey,
+  addMonthsToDateInput,
+  compareDateInputs,
+  getTodayDateInput,
+  parseDateInput,
 } from "../utils/dates.js";
 import { getCardBillingMonth } from "../utils/calculations.js";
 
@@ -21,7 +24,6 @@ export const INSTALLMENT_STATUS = {
   anticipated: "anticipated",
 };
 
-const RECURRING_HORIZON_MONTHS = 18;
 const MAX_RECURRING_OCCURRENCES = 240;
 
 export function isPlanningRule(record) {
@@ -41,8 +43,7 @@ export function getCreditInstallmentPlans(plans = []) {
 
 export function getDebitInstallmentPlans(plans = []) {
   return plans.filter(
-    (plan) =>
-      !plan.isDeleted && plan.paymentMethod === DEBIT_INSTALLMENT_METHOD,
+    (plan) => !plan.isDeleted && plan.paymentMethod === DEBIT_INSTALLMENT_METHOD,
   );
 }
 
@@ -94,7 +95,7 @@ export function buildInstallmentPlanView(plan, transactions = [], cards = []) {
       const aOrder = Number(a.installmentNumber || 0);
       const bOrder = Number(b.installmentNumber || 0);
       if (aOrder !== bOrder) return aOrder - bOrder;
-      return new Date(a.date) - new Date(b.date);
+      return compareDateInputs(a.date, b.date);
     })
     .map((transaction) => ({
       ...transaction,
@@ -149,8 +150,7 @@ export function getRuleTypeLabel(ruleType) {
 }
 
 export function getNextOccurrenceDate(rule, transactions = []) {
-  const startDate = parseDate(rule.startDate);
-  if (!startDate) return "";
+  if (!parseDateInput(rule.startDate)) return "";
 
   const generatedKeys = new Set(
     transactions
@@ -161,10 +161,12 @@ export function getNextOccurrenceDate(rule, transactions = []) {
       .map((transaction) => transaction.recurrenceKey),
   );
 
-  let cursor = startDate;
+  let cursor = rule.startDate;
   let guard = 0;
   while (guard < MAX_RECURRING_OCCURRENCES) {
     const occurrenceDate = formatDateInput(cursor);
+    if (!occurrenceDate) break;
+
     const occurrenceKey = `${rule.id}__${occurrenceDate}`;
     if (
       !generatedKeys.has(occurrenceKey) &&
@@ -172,7 +174,8 @@ export function getNextOccurrenceDate(rule, transactions = []) {
     ) {
       return occurrenceDate;
     }
-    cursor = addFrequency(cursor, rule.frequency, 1);
+
+    cursor = addFrequency(occurrenceDate, rule.frequency, 1);
     guard += 1;
     if (!cursor) break;
   }
@@ -199,9 +202,7 @@ export async function materializePlanningEntries({
     return acc;
   }, {});
 
-  const horizonEnd = new Date();
-  horizonEnd.setMonth(horizonEnd.getMonth() + RECURRING_HORIZON_MONTHS);
-
+  const horizonEnd = getTodayDateInput();
   const timestamp = nowIso();
   const generatedTransactions = [];
 
@@ -249,10 +250,7 @@ export async function materializePlanningEntries({
     }
   }
 
-  const planUpdates = getAllPlanRemainingUpdates(
-    installmentPlans,
-    transactions,
-  );
+  const planUpdates = getAllPlanRemainingUpdates(installmentPlans, transactions);
 
   if (!generatedTransactions.length && !planUpdates.length) {
     return { created: 0, updatedPlans: 0 };
@@ -290,13 +288,16 @@ export function getAllPlanRemainingUpdates(plans = [], transactions = []) {
           !transaction.isDeleted && transaction.installmentPlanId === plan.id,
       );
       if (!relatedTransactions.length) return null;
+
       const remainingInstallments = relatedTransactions.filter(
         (transaction) =>
           getInstallmentStatus(transaction) === INSTALLMENT_STATUS.pending,
       ).length;
+
       if (remainingInstallments === Number(plan.remainingInstallments || 0)) {
         return null;
       }
+
       return {
         ...plan,
         remainingInstallments,
@@ -309,19 +310,25 @@ export function getAllPlanRemainingUpdates(plans = [], transactions = []) {
 }
 
 function buildOccurrences(rule, horizonEnd) {
-  const startDate = parseDate(rule.startDate);
-  if (!startDate) return [];
+  if (!parseDateInput(rule.startDate)) return [];
 
   const occurrences = [];
-  let cursor = startDate;
+  let cursor = rule.startDate;
   let guard = 0;
 
-  while (cursor && cursor <= horizonEnd && guard < MAX_RECURRING_OCCURRENCES) {
+  while (
+    cursor &&
+    compareDateInputs(cursor, horizonEnd) <= 0 &&
+    guard < MAX_RECURRING_OCCURRENCES
+  ) {
     const occurrenceDate = formatDateInput(cursor);
+    if (!occurrenceDate) break;
+
     if (isWithinRuleRange(rule, occurrenceDate)) {
       occurrences.push(occurrenceDate);
     }
-    cursor = addFrequency(cursor, rule.frequency, 1);
+
+    cursor = addFrequency(occurrenceDate, rule.frequency, 1);
     guard += 1;
   }
 
@@ -330,35 +337,29 @@ function buildOccurrences(rule, horizonEnd) {
 
 function isWithinRuleRange(rule, occurrenceDate) {
   if (!occurrenceDate) return false;
-  if (rule.endDate && occurrenceDate > rule.endDate) return false;
-  return occurrenceDate >= rule.startDate;
+  if (rule.endDate && compareDateInputs(occurrenceDate, rule.endDate) > 0) {
+    return false;
+  }
+  return compareDateInputs(occurrenceDate, rule.startDate) >= 0;
 }
 
-function addFrequency(date, frequency = "monthly", step = 1) {
-  const baseDate = new Date(date);
-  if (Number.isNaN(baseDate.getTime())) return null;
+function addFrequency(dateInput, frequency = "monthly", step = 1) {
+  const baseDate = parseDateInput(dateInput);
+  if (!baseDate) return null;
 
   if (frequency === "weekly") {
-    baseDate.setDate(baseDate.getDate() + 7 * step);
-    return baseDate;
+    const nextDate = new Date(baseDate.getTime());
+    nextDate.setDate(nextDate.getDate() + 7 * step);
+    return formatDateInput(nextDate);
   }
 
   if (frequency === "quarterly") {
-    baseDate.setMonth(baseDate.getMonth() + 3 * step);
-    return baseDate;
+    return addMonthsToDateInput(dateInput, 3 * step);
   }
 
   if (frequency === "yearly") {
-    baseDate.setFullYear(baseDate.getFullYear() + step);
-    return baseDate;
+    return addMonthsToDateInput(dateInput, 12 * step);
   }
 
-  baseDate.setMonth(baseDate.getMonth() + step);
-  return baseDate;
-}
-
-function parseDate(dateValue) {
-  const parsed = new Date(dateValue);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed;
+  return addMonthsToDateInput(dateInput, step);
 }
