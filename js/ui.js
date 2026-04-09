@@ -16,6 +16,24 @@ const navItems = [
   ['settings', 'fa-gear', 'Configurações'],
 ];
 
+const toastMetaByType = {
+  success: {
+    title: 'Movimento concluído',
+    badge: 'feito',
+    icon: 'fa-check',
+  },
+  error: {
+    title: 'Não foi possível concluir',
+    badge: 'erro',
+    icon: 'fa-xmark',
+  },
+  info: {
+    title: 'Atualização do sistema',
+    badge: 'aviso',
+    icon: 'fa-bell',
+  },
+};
+
 export function renderShell() {
   renderSidebar();
   renderTopbar();
@@ -175,8 +193,15 @@ export function closeMobileDrawer() {
 
 export function openModal(content) {
   const root = document.getElementById('modal-root');
-  root.innerHTML = `<div class="modal-backdrop"><div class="modal-panel">${content}</div></div>`;
-  root.querySelector('.modal-backdrop').addEventListener('click', (e) => {
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal-panel premium-modal-panel" role="dialog" aria-modal="true">
+        <div class="modal-orb modal-orb-primary"></div>
+        <div class="modal-orb modal-orb-secondary"></div>
+        <div class="modal-inner">${content}</div>
+      </div>
+    </div>`;
+  root.querySelector('.modal-backdrop')?.addEventListener('click', (e) => {
     if (e.target.classList.contains('modal-backdrop')) closeModal();
   });
 }
@@ -186,15 +211,21 @@ export function closeModal() {
 }
 
 export function confirmDialog({ title, message, confirmText = 'Confirmar', tone = 'danger', onConfirm }) {
+  const isDanger = tone === 'danger';
   openModal(`
-    <div class="space-y-5">
-      <div>
-        <div class="text-2xl font-bold">${title}</div>
-        <p class="text-slate-500 mt-2">${message}</p>
+    <div class="confirm-shell">
+      <div class="confirm-hero">
+        <div class="confirm-icon ${isDanger ? 'confirm-icon-danger' : 'confirm-icon-primary'}">
+          <i class="fa-solid ${isDanger ? 'fa-triangle-exclamation' : 'fa-circle-check'}"></i>
+        </div>
+        <div>
+          <div class="confirm-title">${title}</div>
+          <p class="confirm-copy">${message}</p>
+        </div>
       </div>
-      <div class="flex justify-end gap-3">
+      <div class="confirm-actions">
         <button id="confirm-cancel-btn" class="action-btn">Cancelar</button>
-        <button id="confirm-accept-btn" class="action-btn ${tone === 'danger' ? 'action-btn-danger' : 'action-btn-primary'}">${confirmText}</button>
+        <button id="confirm-accept-btn" class="action-btn ${isDanger ? 'action-btn-danger' : 'action-btn-primary'}">${confirmText}</button>
       </div>
     </div>`);
 
@@ -210,11 +241,31 @@ export function confirmDialog({ title, message, confirmText = 'Confirmar', tone 
 
 export function toast(message, type = 'info') {
   const root = document.getElementById('toast-root');
+  if (!root) return;
+
+  const meta = toastMetaByType[type] || toastMetaByType.info;
   const el = document.createElement('div');
-  el.className = 'toast';
-  el.innerHTML = `<div class="font-semibold mb-1">${type === 'error' ? 'Erro' : type === 'success' ? 'Sucesso' : 'Aviso'}</div><div class="text-sm text-slate-200">${message}</div>`;
+  el.className = `toast toast-${type}`;
+  el.innerHTML = `
+    <div class="toast-shell">
+      <div class="toast-icon-wrap">
+        <div class="toast-icon">
+          <i class="fa-solid ${meta.icon}"></i>
+        </div>
+      </div>
+      <div class="toast-copy">
+        <div class="toast-title-row">
+          <div class="toast-title">${meta.title}</div>
+          <span class="toast-pill">${meta.badge}</span>
+        </div>
+        <div class="toast-message">${message}</div>
+      </div>
+    </div>
+    <div class="toast-progress"></div>`;
+
+  el.addEventListener('click', () => el.remove());
   root.appendChild(el);
-  setTimeout(() => el.remove(), 3200);
+  setTimeout(() => el.remove(), 4200);
 }
 
 export function pageHeader(title, subtitle, actions = '') {

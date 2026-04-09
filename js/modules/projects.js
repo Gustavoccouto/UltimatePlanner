@@ -15,6 +15,108 @@ import { getCurrentUser } from "./onboarding.js";
 
 const PROJECT_TABS = ["checklist", "analytics", "financas"];
 const STATUS_FILTERS = ["tudo", "pendentes", "concluidos"];
+const DEFAULT_PROJECT_THEME = "aurora";
+const PROJECT_THEMES = {
+  aurora: {
+    label: "Aurora",
+    coverUrl:
+      "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1200&q=80",
+    accent: "99,102,241",
+    accentAlt: "168,85,247",
+  },
+  viagem: {
+    label: "Viagem",
+    coverUrl:
+      "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1200&q=80",
+    accent: "14,165,233",
+    accentAlt: "45,212,191",
+  },
+  setup: {
+    label: "Setup",
+    coverUrl:
+      "https://images.unsplash.com/photo-1496181133206-80ce9b88a853?auto=format&fit=crop&w=1200&q=80",
+    accent: "79,70,229",
+    accentAlt: "124,58,237",
+  },
+  casa: {
+    label: "Casa",
+    coverUrl:
+      "https://images.unsplash.com/photo-1484154218962-a197022b5858?auto=format&fit=crop&w=1200&q=80",
+    accent: "249,115,22",
+    accentAlt: "234,88,12",
+  },
+  carro: {
+    label: "Carro",
+    coverUrl:
+      "https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?auto=format&fit=crop&w=1200&q=80",
+    accent: "239,68,68",
+    accentAlt: "234,179,8",
+  },
+  estudo: {
+    label: "Estudo",
+    coverUrl:
+      "https://images.unsplash.com/photo-1491841550275-ad7854e35ca6?auto=format&fit=crop&w=1200&q=80",
+    accent: "16,185,129",
+    accentAlt: "59,130,246",
+  },
+  evento: {
+    label: "Evento",
+    coverUrl:
+      "https://images.unsplash.com/photo-1519167758481-83f550bb49b3?auto=format&fit=crop&w=1200&q=80",
+    accent: "236,72,153",
+    accentAlt: "168,85,247",
+  },
+  negocio: {
+    label: "Negócio",
+    coverUrl:
+      "https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1200&q=80",
+    accent: "15,23,42",
+    accentAlt: "37,99,235",
+  },
+};
+
+function guessProjectThemeKey(sourceText = "") {
+  const text = String(sourceText || "").toLowerCase();
+  if (!text) return DEFAULT_PROJECT_THEME;
+  if (/(viagem|trip|f[eé]rias|ferias|praia|hotel|passagem|turismo)/.test(text)) return "viagem";
+  if (/(setup|pc|computador|monitor|gamer|escritorio|escrit[oó]rio|notebook)/.test(text)) return "setup";
+  if (/(carro|moto|ve[ií]culo|oficina|garagem|autom[oó]vel)/.test(text)) return "carro";
+  if (/(casa|apartamento|reforma|m[oó]vel|decora[cç][aã]o|cozinha|quarto)/.test(text)) return "casa";
+  if (/(estudo|curso|faculdade|livro|certifica[cç][aã]o|aula|p[oó]s)/.test(text)) return "estudo";
+  if (/(casamento|festa|evento|anivers[aá]rio|ch[aá] de|formatura)/.test(text)) return "evento";
+  if (/(neg[oó]cio|empresa|loja|cliente|side project|startup|trabalho)/.test(text)) return "negocio";
+  return DEFAULT_PROJECT_THEME;
+}
+
+function normalizeProjectThemeKey(themeKey, fallbackText = "") {
+  const normalized = String(themeKey || "").trim().toLowerCase();
+  if (PROJECT_THEMES[normalized]) return normalized;
+  return guessProjectThemeKey(fallbackText);
+}
+
+function resolveProjectTheme(project = {}) {
+  const key = normalizeProjectThemeKey(
+    project.themeKey,
+    `${project.name || ""} ${project.notes || ""} ${project.desc || ""}`,
+  );
+  return {
+    key,
+    ...PROJECT_THEMES[key],
+  };
+}
+
+function renderProjectThemeOptions(selectedKey = DEFAULT_PROJECT_THEME) {
+  return Object.entries(PROJECT_THEMES)
+    .map(
+      ([key, theme]) =>
+        `<option value="${key}" ${selectedKey === key ? "selected" : ""}>${theme.label}</option>`,
+    )
+    .join("");
+}
+
+function projectThemeStyle(theme) {
+  return `style="--project-theme-image:url('${theme.coverUrl}');--project-accent-rgb:${theme.accent};--project-accent-rgb-alt:${theme.accentAlt};"`;
+}
 
 function getProjects() {
   return state.data.projects.filter((item) => !item.isDeleted);
@@ -136,21 +238,36 @@ function getVisibleProjectItems(projectId) {
 
 function projectGridCard(project) {
   const summary = getProjectSummary(project.id);
+  const theme = resolveProjectTheme(project);
   return `
-    <button type="button" class="card project-summary-card text-left" data-project-open="${project.id}">
-      <div class="project-summary-icon">${project.icon || "✨"}</div>
-      <div class="project-summary-title-row">
-        <div>
-          <div class="eyebrow">Projeto</div>
-          <div class="project-summary-title">${project.name}</div>
-          <div class="project-summary-subtitle">${project.notes || project.desc || "Planejamento organizado por itens."}</div>
+    <button
+      type="button"
+      class="card project-summary-card project-theme-card text-left"
+      data-project-open="${project.id}"
+      ${projectThemeStyle(theme)}
+    >
+      <div class="project-summary-media">
+        <div class="project-summary-media-top">
+          <span class="project-summary-theme-pill">${theme.label}</span>
+          <span class="project-summary-media-icon">${project.icon || "✨"}</span>
         </div>
-        <i class="fa-solid fa-arrow-up-right-from-square text-slate-300"></i>
       </div>
-      <div class="project-summary-metrics">
-        <div><span>Total estimado</span><strong>${currency(summary.totalEstimated)}</strong></div>
-        <div><span>Em caixa</span><strong>${currency(summary.cashBalance)}</strong></div>
-        <div><span>Progresso</span><strong>${percent(summary.progress)}</strong></div>
+
+      <div class="project-summary-body">
+        <div class="project-summary-title-row">
+          <div>
+            <div class="eyebrow">Projeto</div>
+            <div class="project-summary-title">${project.name}</div>
+            <div class="project-summary-subtitle">${project.notes || project.desc || "Planejamento organizado por itens."}</div>
+          </div>
+          <i class="fa-solid fa-arrow-up-right-from-square text-slate-300"></i>
+        </div>
+
+        <div class="project-summary-metrics">
+          <div><span>Total estimado</span><strong>${currency(summary.totalEstimated)}</strong></div>
+          <div><span>Em caixa</span><strong>${currency(summary.cashBalance)}</strong></div>
+          <div><span>Progresso</span><strong>${percent(summary.progress)}</strong></div>
+        </div>
       </div>
     </button>`;
 }
@@ -160,35 +277,67 @@ function renderProjectList() {
   return `
     ${pageHeader("Projetos", "Projetos agora são separados de metas: aqui você monta itens planejados, soma o custo total e acompanha os aportes no caixa do projeto.", '<button id="new-project-btn" class="action-btn action-btn-primary"><i class="fa-solid fa-plus mr-2"></i>Novo projeto</button>')}
 
-    <section class="card p-5 mb-6 card-glass">
-      <form id="project-form" class="grid lg:grid-cols-[1fr_.9fr_.5fr_auto] gap-3 items-end">
-        <div><label class="text-sm font-semibold block mb-2">Nome do projeto</label><input name="name" class="field" placeholder="Ex.: Viagem, setup, carro" /></div>
-        <div><label class="text-sm font-semibold block mb-2">Descrição</label><input name="notes" class="field" placeholder="Resumo rápido do objetivo" /></div>
-        <div><label class="text-sm font-semibold block mb-2">Ícone</label><input name="icon" class="field" placeholder="✨" maxlength="2" /></div>
+    <section class="card p-5 mb-6 card-glass project-create-card">
+      <form id="project-form" class="grid lg:grid-cols-[1.1fr_1fr_.55fr_.8fr_auto] gap-3 items-end">
+        <div>
+          <label class="text-sm font-semibold block mb-2">Nome do projeto</label>
+          <input name="name" class="field" placeholder="Ex.: Viagem, setup, carro" />
+        </div>
+        <div>
+          <label class="text-sm font-semibold block mb-2">Descrição</label>
+          <input name="notes" class="field" placeholder="Resumo rápido do objetivo" />
+        </div>
+        <div>
+          <label class="text-sm font-semibold block mb-2">Ícone</label>
+          <input name="icon" class="field" placeholder="✨" maxlength="2" />
+        </div>
+        <div>
+          <label class="text-sm font-semibold block mb-2">Tema visual</label>
+          <select name="themeKey" class="select">${renderProjectThemeOptions(DEFAULT_PROJECT_THEME)}</select>
+        </div>
         <button class="action-btn action-btn-primary">Criar</button>
       </form>
+      <div class="project-theme-helper mt-3">
+        As imagens são aplicadas automaticamente de acordo com o tema escolhido.
+      </div>
     </section>
 
     <section class="project-list-grid">
-      ${projects.length ? projects.map(projectGridCard).join("") : `<div class="card p-8 text-center"><div class="text-lg font-bold">Nenhum projeto criado</div><p class="text-slate-500 mt-2">Crie o primeiro projeto e depois adicione itens, participantes e aportes em caixa.</p></div>`}
+      ${
+        projects.length
+          ? projects.map(projectGridCard).join("")
+          : `<div class="card p-8 text-center"><div class="text-lg font-bold">Nenhum projeto criado</div><p class="text-slate-500 mt-2">Crie o primeiro projeto e depois adicione itens, participantes e aportes em caixa.</p></div>`
+      }
     </section>`;
 }
 
 function renderProjectHeader(project, summary) {
+  const theme = resolveProjectTheme(project);
   return `
     <section class="project-detail-shell">
-      <div class="project-detail-topbar">
-        <button type="button" class="project-back-btn" id="project-back-btn"><i class="fa-solid fa-arrow-left"></i></button>
-        <div class="project-detail-heading">
-          <h1 class="page-title !mb-0">${project.name}</h1>
-          <p class="page-subtitle">${project.notes || project.desc || "Projeto personalizado no UltimatePlanner."}</p>
+      <article class="card project-hero-card" ${projectThemeStyle(theme)}>
+        <div class="project-hero-content">
+          <div class="project-detail-topbar">
+            <button type="button" class="project-back-btn" id="project-back-btn"><i class="fa-solid fa-arrow-left"></i></button>
+            <div class="project-hero-chip-row">
+              <span class="project-summary-theme-pill">${theme.label}</span>
+              <span class="project-summary-theme-pill project-summary-theme-pill-soft">${project.icon || "✨"}</span>
+            </div>
+          </div>
+
+          <div class="project-hero-main">
+            <div class="project-detail-heading">
+              <h1 class="page-title !mb-0">${project.name}</h1>
+              <p class="page-subtitle project-hero-subtitle">${project.notes || project.desc || "Projeto personalizado no UltimatePlanner."}</p>
+            </div>
+            <div class="project-detail-actions">
+              <button id="edit-project-btn" class="action-btn"><i class="fa-solid fa-pen mr-2"></i>Editar</button>
+              <button id="delete-project-btn" class="action-btn action-btn-danger-soft"><i class="fa-solid fa-trash mr-2"></i>Excluir</button>
+              <button id="new-project-btn" class="action-btn action-btn-primary"><i class="fa-solid fa-plus mr-2"></i>Novo projeto</button>
+            </div>
+          </div>
         </div>
-        <div class="project-detail-actions">
-          <button id="edit-project-btn" class="action-btn"><i class="fa-solid fa-pen mr-2"></i>Editar</button>
-          <button id="delete-project-btn" class="action-btn action-btn-danger-soft"><i class="fa-solid fa-trash mr-2"></i>Excluir</button>
-          <button id="new-project-btn" class="action-btn action-btn-primary"><i class="fa-solid fa-plus mr-2"></i>Novo projeto</button>
-        </div>
-      </div>
+      </article>
 
       <div class="project-tab-strip">
         ${PROJECT_TABS.map((tab) => {
@@ -448,11 +597,23 @@ async function openProjectItemModal(projectId, itemId = null) {
 async function openProjectEditModal(projectId) {
   const existing = await getOne("projects", projectId);
   if (!existing) return;
+  const theme = resolveProjectTheme(existing);
+
   openModal(`
-    <div class="flex items-center justify-between mb-6"><div><div class="text-2xl font-bold">Editar projeto</div><div class="text-sm text-slate-500 mt-1">Atualize o nome, descrição e ícone do projeto.</div></div><button id="close-modal" class="action-btn">Fechar</button></div>
+    <div class="premium-modal-head">
+      <div>
+        <div class="premium-modal-kicker">Projetos</div>
+        <div class="premium-modal-title">Editar projeto</div>
+        <div class="premium-modal-subtitle">Atualize o nome, descrição, ícone e tema visual do projeto.</div>
+      </div>
+      <button id="close-modal" class="action-btn">Fechar</button>
+    </div>
+
     <form id="project-edit-form" data-project-id="${existing.id}" class="grid md:grid-cols-2 gap-4">
       <div><label class="text-sm font-semibold mb-2 block">Nome do projeto</label><input name="name" class="field" value="${existing.name || ""}" required /></div>
       <div><label class="text-sm font-semibold mb-2 block">Ícone</label><input name="icon" class="field" maxlength="2" value="${existing.icon || "✨"}" /></div>
+      <div><label class="text-sm font-semibold mb-2 block">Tema visual</label><select name="themeKey" class="select">${renderProjectThemeOptions(theme.key)}</select></div>
+      <div class="project-theme-helper md:flex md:items-end">A capa é aplicada automaticamente conforme o tema selecionado.</div>
       <div class="md:col-span-2"><label class="text-sm font-semibold mb-2 block">Descrição</label><textarea name="notes" class="textarea" rows="3">${existing.notes || existing.desc || ""}</textarea></div>
       <div class="md:col-span-2 flex justify-end gap-3 pt-2"><button type="button" id="cancel-project-edit" class="action-btn">Cancelar</button><button class="action-btn action-btn-primary" type="submit">Salvar projeto</button></div>
     </form>`);
@@ -569,11 +730,20 @@ async function saveProject(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   const currentUser = getCurrentUser();
+  const name = String(form.get("name") || "").trim();
+  const notes = String(form.get("notes") || "").trim();
+  const themeKey = normalizeProjectThemeKey(
+    form.get("themeKey"),
+    `${name} ${notes}`,
+  );
+
   const project = {
     id: createId("project"),
-    name: String(form.get("name") || "").trim(),
-    notes: String(form.get("notes") || "").trim(),
+    name,
+    notes,
     icon: String(form.get("icon") || "").trim() || "✨",
+    themeKey,
+    coverImageUrl: PROJECT_THEMES[themeKey].coverUrl,
     ownerUserId: currentUser?.id || null,
     createdAt: nowIso(),
     updatedAt: nowIso(),
@@ -602,11 +772,19 @@ async function saveProjectEdit(event) {
   const existing = await getOne("projects", projectId);
   if (!existing) return;
   const form = new FormData(event.currentTarget);
+  const name = String(form.get("name") || "").trim();
+  const notes = String(form.get("notes") || "").trim();
+  const themeKey = normalizeProjectThemeKey(
+    form.get("themeKey"),
+    `${name} ${notes}`,
+  );
   const updated = {
     ...existing,
-    name: String(form.get("name") || "").trim(),
-    notes: String(form.get("notes") || "").trim(),
+    name,
+    notes,
     icon: String(form.get("icon") || "").trim() || "✨",
+    themeKey,
+    coverImageUrl: PROJECT_THEMES[themeKey].coverUrl,
     updatedAt: nowIso(),
     syncStatus: "pending",
     version: (existing.version || 0) + 1,
