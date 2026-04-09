@@ -264,7 +264,7 @@ function confirmDelete(investmentId) {
 
 function metricCard(label, value, icon) {
   return `
-    <article class="card investment-metric-card">
+    <article class="card investment-metric-card p-6">
       <div class="compact-stat-icon"><i class="fa-solid ${icon}"></i></div>
       <div class="compact-stat-label mt-4">${label}</div>
       <div class="compact-stat-value">${value}</div>
