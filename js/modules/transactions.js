@@ -36,6 +36,105 @@ import {
   getNextOccurrenceDate,
 } from "../services/planning.js";
 
+const INSTALLMENT_AMOUNT_MODES = {
+  total: "total",
+  installment: "installment",
+};
+
+function resolveInstallmentAmounts(rawAmount, installmentCount, amountMode) {
+  const normalizedCount = Number(installmentCount || 0);
+  const normalizedAmount = Math.round(Number(rawAmount || 0) * 100) / 100;
+  const safeMode =
+    amountMode === INSTALLMENT_AMOUNT_MODES.installment
+      ? INSTALLMENT_AMOUNT_MODES.installment
+      : INSTALLMENT_AMOUNT_MODES.total;
+
+  if (normalizedAmount <= 0 || normalizedCount < 1) {
+    return { totalAmount: 0, amounts: [] };
+  }
+
+  if (safeMode === INSTALLMENT_AMOUNT_MODES.installment) {
+    const installmentValue = normalizedAmount;
+    const amounts = Array.from({ length: normalizedCount }, () => installmentValue);
+    return {
+      totalAmount:
+        Math.round(installmentValue * normalizedCount * 100) / 100,
+      amounts,
+    };
+  }
+
+  const baseInstallmentValue =
+    Math.round((normalizedAmount / normalizedCount) * 100) / 100;
+  let consumed = 0;
+  const amounts = Array.from({ length: normalizedCount }, (_, index) => {
+    const installmentNumber = index + 1;
+    const amount =
+      installmentNumber === normalizedCount
+        ? Math.round((normalizedAmount - consumed) * 100) / 100
+        : baseInstallmentValue;
+    consumed += amount;
+    return amount;
+  });
+
+  return {
+    totalAmount: Math.round(normalizedAmount * 100) / 100,
+    amounts,
+  };
+}
+
+function bindInstallmentAmountModePreview({
+  modeSelectId,
+  amountInputId,
+  countInputId,
+  labelId,
+  hintId,
+}) {
+  const modeField = document.getElementById(modeSelectId);
+  const amountField = document.getElementById(amountInputId);
+  const countField = document.getElementById(countInputId);
+  const label = document.getElementById(labelId);
+  const hint = document.getElementById(hintId);
+  if (!modeField || !amountField || !countField || !label || !hint) return;
+
+  const sync = () => {
+    const mode =
+      modeField.value === INSTALLMENT_AMOUNT_MODES.installment
+        ? INSTALLMENT_AMOUNT_MODES.installment
+        : INSTALLMENT_AMOUNT_MODES.total;
+    const installmentCount = Number(countField.value || 0);
+    const enteredAmount = Number(amountField.value || 0);
+
+    label.textContent =
+      mode === INSTALLMENT_AMOUNT_MODES.installment
+        ? "Valor de cada parcela"
+        : "Valor total";
+
+    if (enteredAmount > 0 && installmentCount > 0) {
+      const resolved = resolveInstallmentAmounts(
+        enteredAmount,
+        installmentCount,
+        mode,
+      );
+      const firstInstallment = Number(resolved.amounts[0] || 0);
+      hint.textContent =
+        mode === INSTALLMENT_AMOUNT_MODES.installment
+          ? `Resultado: ${installmentCount}x de ${currency(firstInstallment)} • total ${currency(resolved.totalAmount)}`
+          : `Resultado: ${installmentCount}x de ${currency(firstInstallment)} • total ${currency(resolved.totalAmount)}`;
+      return;
+    }
+
+    hint.textContent =
+      mode === INSTALLMENT_AMOUNT_MODES.installment
+        ? "Informe quanto vale cada parcela para o app calcular o total automaticamente."
+        : "Informe o valor total para o app distribuir entre as parcelas.";
+  };
+
+  modeField.addEventListener("change", sync);
+  amountField.addEventListener("input", sync);
+  countField.addEventListener("input", sync);
+  sync();
+}
+
 export function renderTransactions() {
   const cardsById = getCardsById(state.data.creditCards);
   const rows = [...state.data.transactions]
@@ -444,8 +543,19 @@ async function openDebitInstallmentModal() {
       <div class="md:col-span-2"><label class="text-sm font-semibold mb-2 block">Descrição</label><input name="description" class="field" placeholder="Ex.: Curso parcelado" required /></div>
       <div><label class="text-sm font-semibold mb-2 block">Conta</label><select name="accountId" class="select">${accounts.map((account) => `<option value="${account.id}">${account.name}</option>`).join("")}</select></div>
       <div><label class="text-sm font-semibold mb-2 block">Categoria</label><input name="category" class="field" placeholder="Educação" /></div>
-      <div><label class="text-sm font-semibold mb-2 block">Valor total</label><input name="totalAmount" type="number" min="0.01" step="0.01" class="field" required /></div>
-      <div><label class="text-sm font-semibold mb-2 block">Parcelas</label><input name="installmentCount" type="number" min="2" max="36" value="2" class="field" required /></div>
+      <div>
+        <label class="text-sm font-semibold mb-2 block">Como informar o valor</label>
+        <select name="amountMode" id="debit-installment-amount-mode" class="select">
+          <option value="total">Valor total</option>
+          <option value="installment">Valor de cada parcela</option>
+        </select>
+      </div>
+      <div>
+        <label id="debit-installment-amount-label" class="text-sm font-semibold mb-2 block">Valor total</label>
+        <input id="debit-installment-amount-input" name="amountValue" type="number" min="0.01" step="0.01" class="field" required />
+        <div id="debit-installment-amount-hint" class="text-xs text-slate-500 mt-2">Informe o valor total para o app distribuir entre as parcelas.</div>
+      </div>
+      <div><label class="text-sm font-semibold mb-2 block">Parcelas</label><input id="debit-installment-count" name="installmentCount" type="number" min="2" max="36" value="2" class="field" required /></div>
       <div><label class="text-sm font-semibold mb-2 block">Primeira parcela</label><input name="purchaseDate" type="date" class="field" value="${formatDateInput()}" required /></div>
       <div class="md:col-span-2"><label class="text-sm font-semibold mb-2 block">Observações</label><textarea name="notes" class="textarea" rows="3"></textarea></div>
       <div class="md:col-span-2 flex justify-end gap-3 pt-2"><button type="button" id="cancel-debit-installment" class="action-btn">Cancelar</button><button class="action-btn action-btn-primary" type="submit">Salvar parcelamento</button></div>
@@ -458,6 +568,13 @@ async function openDebitInstallmentModal() {
   document
     .getElementById("debit-installment-form")
     ?.addEventListener("submit", saveDebitInstallmentPlan);
+  bindInstallmentAmountModePreview({
+    modeSelectId: "debit-installment-amount-mode",
+    amountInputId: "debit-installment-amount-input",
+    countInputId: "debit-installment-count",
+    labelId: "debit-installment-amount-label",
+    hintId: "debit-installment-amount-hint",
+  });
 }
 
 async function saveTransaction(event) {
@@ -577,8 +694,17 @@ async function saveDebitInstallmentPlan(event) {
     const payload = Object.fromEntries(
       new FormData(event.currentTarget).entries(),
     );
-    const totalAmount = Number(payload.totalAmount);
     const installmentCount = Number(payload.installmentCount);
+    const amountMode =
+      payload.amountMode === INSTALLMENT_AMOUNT_MODES.installment
+        ? INSTALLMENT_AMOUNT_MODES.installment
+        : INSTALLMENT_AMOUNT_MODES.total;
+    const resolvedAmounts = resolveInstallmentAmounts(
+      payload.amountValue,
+      installmentCount,
+      amountMode,
+    );
+    const totalAmount = Number(resolvedAmounts.totalAmount || 0);
     if (totalAmount <= 0 || installmentCount < 2) {
       throw new Error("Informe um valor válido e pelo menos 2 parcelas.");
     }
@@ -596,6 +722,8 @@ async function saveDebitInstallmentPlan(event) {
       remainingInstallments: installmentCount,
       purchaseDate: payload.purchaseDate,
       notes: payload.notes || "",
+      amountEntryMode: amountMode,
+      amountEntryValue: Math.round(Number(payload.amountValue || 0) * 100) / 100,
       createdAt: timestamp,
       updatedAt: timestamp,
       version: 1,
@@ -603,18 +731,11 @@ async function saveDebitInstallmentPlan(event) {
       isDeleted: false,
     };
 
-    const baseInstallmentValue =
-      Math.round((totalAmount / installmentCount) * 100) / 100;
-    let consumed = 0;
     const transactions = Array.from(
       { length: installmentCount },
       (_, index) => {
         const installmentNumber = index + 1;
-        const amount =
-          installmentNumber === installmentCount
-            ? Math.round((totalAmount - consumed) * 100) / 100
-            : baseInstallmentValue;
-        consumed += amount;
+        const amount = Number(resolvedAmounts.amounts[index] || 0);
         return {
           id: createId("tx"),
           description: `${payload.description} ${installmentNumber}/${installmentCount}`,

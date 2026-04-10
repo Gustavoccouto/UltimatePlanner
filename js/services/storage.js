@@ -21,6 +21,20 @@ const STORE_PREFIX = {
   meta: "meta",
 };
 
+const STORAGE_SIGNAL_KEY = "ultimateplanner_storage_signal";
+const STORAGE_CHANNEL_NAME = "ultimateplanner_storage_channel";
+const LOCAL_SOURCE_ID = `tab_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
+let storageChannel = null;
+
+function getStorageChannel() {
+  if (typeof BroadcastChannel === "undefined") return null;
+  if (!storageChannel) {
+    storageChannel = new BroadcastChannel(STORAGE_CHANNEL_NAME);
+  }
+  return storageChannel;
+}
+
 function createGeneratedId(storeName) {
   const prefix = STORE_PREFIX[storeName] || "id";
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -66,6 +80,33 @@ function getScopedDbName() {
     .trim()
     .toLowerCase();
   return `${APP_CONFIG.dbName}__${workspaceKey}`;
+}
+
+function createStorageSignal(reason = "write") {
+  return {
+    type: "workspace-storage-changed",
+    dbName: getScopedDbName(),
+    workspaceKey: getWorkspaceKey(),
+    reason,
+    sourceId: LOCAL_SOURCE_ID,
+    at: Date.now(),
+  };
+}
+
+function notifyStorageMutation(reason = "write") {
+  const payload = createStorageSignal(reason);
+
+  try {
+    localStorage.setItem(STORAGE_SIGNAL_KEY, JSON.stringify(payload));
+  } catch {
+    // noop
+  }
+
+  try {
+    getStorageChannel()?.postMessage(payload);
+  } catch {
+    // noop
+  }
 }
 
 function openDb(dbName) {
@@ -117,12 +158,17 @@ export async function deleteCurrentWorkspaceDb() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.deleteDatabase(dbName);
 
-    request.onsuccess = () => resolve(true);
+    request.onsuccess = () => {
+      notifyStorageMutation("delete-db");
+      resolve(true);
+    };
+
     request.onerror = () =>
       reject(
         request.error ||
           new Error("Não foi possível excluir a base local do workspace."),
       );
+
     request.onblocked = () =>
       reject(
         new Error(
@@ -159,17 +205,19 @@ export async function putOne(storeName, record, options = {}) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, "readwrite");
     tx.objectStore(storeName).put(normalized);
-    tx.oncomplete = () => resolve(normalized);
-    tx.onerror = () =>
-      reject(tx.error || new Error(`Falha ao salvar em ${storeName}.`));
-    tx.onabort = () =>
-      reject(tx.error || new Error(`Transação abortada em ${storeName}.`));
+    tx.oncomplete = () => {
+      notifyStorageMutation(`put:${storeName}`);
+      resolve(normalized);
+    };
+    tx.onerror = () => reject(tx.error || new Error(`Falha ao salvar em ${storeName}.`));
+    tx.onabort = () => reject(tx.error || new Error(`Transação abortada em ${storeName}.`));
   });
 }
 
 export async function bulkPut(storeName, records = [], options = {}) {
   const { skipInvalid = false, allowGenerateId = false } = options;
   const db = await getDb();
+
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, "readwrite");
     const store = tx.objectStore(storeName);
@@ -191,13 +239,15 @@ export async function bulkPut(storeName, records = [], options = {}) {
       }
     }
 
-    tx.oncomplete = () => resolve(accepted);
-    tx.onerror = () =>
-      reject(tx.error || new Error(`Falha em lote na store ${storeName}.`));
+    tx.oncomplete = () => {
+      if (accepted.length) {
+        notifyStorageMutation(`bulk:${storeName}`);
+      }
+      resolve(accepted);
+    };
+    tx.onerror = () => reject(tx.error || new Error(`Falha em lote na store ${storeName}.`));
     tx.onabort = () =>
-      reject(
-        tx.error || new Error(`Transação abortada na store ${storeName}.`),
-      );
+      reject(tx.error || new Error(`Transação abortada na store ${storeName}.`));
   });
 }
 
@@ -206,7 +256,10 @@ export async function removeOne(storeName, id) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, "readwrite");
     tx.objectStore(storeName).delete(id);
-    tx.oncomplete = () => resolve(true);
+    tx.oncomplete = () => {
+      notifyStorageMutation(`remove:${storeName}`);
+      resolve(true);
+    };
     tx.onerror = () => reject(tx.error);
   });
 }
@@ -216,9 +269,44 @@ export async function clearStore(storeName) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, "readwrite");
     tx.objectStore(storeName).clear();
-    tx.oncomplete = () => resolve(true);
+    tx.oncomplete = () => {
+      notifyStorageMutation(`clear:${storeName}`);
+      resolve(true);
+    };
     tx.onerror = () => reject(tx.error);
   });
+}
+
+export function subscribeToExternalStorageChanges(listener) {
+  if (typeof listener !== "function") {
+    return () => {};
+  }
+
+  const handlePayload = (payload) => {
+    if (!payload || payload.sourceId === LOCAL_SOURCE_ID) return;
+    if (payload.dbName !== getScopedDbName()) return;
+    listener(payload);
+  };
+
+  const onStorage = (event) => {
+    if (event.key !== STORAGE_SIGNAL_KEY || !event.newValue) return;
+    try {
+      handlePayload(JSON.parse(event.newValue));
+    } catch {
+      // noop
+    }
+  };
+
+  const channel = getStorageChannel();
+  const onChannelMessage = (event) => handlePayload(event.data);
+
+  window.addEventListener("storage", onStorage);
+  channel?.addEventListener("message", onChannelMessage);
+
+  return () => {
+    window.removeEventListener("storage", onStorage);
+    channel?.removeEventListener("message", onChannelMessage);
+  };
 }
 
 export function isValidStoreRecord(record) {

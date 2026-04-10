@@ -25,6 +25,7 @@ export const INSTALLMENT_STATUS = {
 };
 
 const MAX_RECURRING_OCCURRENCES = 240;
+const PLANNING_HORIZON_MONTHS = 12;
 
 export function isPlanningRule(record) {
   return record?.kind === PLANNING_RULE_KIND && !record.isDeleted;
@@ -36,8 +37,7 @@ export function getRecurringRules(preferences = []) {
 
 export function getCreditInstallmentPlans(plans = []) {
   return plans.filter(
-    (plan) =>
-      !plan.isDeleted && plan.paymentMethod !== DEBIT_INSTALLMENT_METHOD,
+    (plan) => !plan.isDeleted && plan.paymentMethod !== DEBIT_INSTALLMENT_METHOD,
   );
 }
 
@@ -190,19 +190,31 @@ export async function materializePlanningEntries({
   creditCards = [],
 } = {}) {
   const recurringRules = getRecurringRules(preferences);
+  const duplicateTransactionUpdates = getDuplicatePlanningTransactionUpdates(transactions);
+  const duplicateIds = new Set(duplicateTransactionUpdates.map((item) => item.id));
+  const effectiveTransactions = transactions.map((transaction) =>
+    duplicateIds.has(transaction.id)
+      ? { ...transaction, isDeleted: true }
+      : transaction,
+  );
+
   const existingRecurrenceKeys = new Set(
-    transactions
+    effectiveTransactions
       .filter(
         (transaction) => !transaction.isDeleted && transaction.recurrenceKey,
       )
       .map((transaction) => transaction.recurrenceKey),
   );
+
   const cardsById = creditCards.reduce((acc, card) => {
     if (card?.id) acc[card.id] = card;
     return acc;
   }, {});
 
-  const horizonEnd = getTodayDateInput();
+  const horizonEnd = addMonthsToDateInput(
+    getTodayDateInput(),
+    PLANNING_HORIZON_MONTHS,
+  );
   const timestamp = nowIso();
   const generatedTransactions = [];
 
@@ -218,7 +230,7 @@ export async function materializePlanningEntries({
         rule.targetType === "card";
 
       generatedTransactions.push({
-        id: createId("tx"),
+        id: buildRecurringTransactionId(rule.id, occurrenceDate),
         description: rule.name,
         type:
           rule.ruleType === RULE_TYPES.recurringIncome
@@ -250,10 +262,23 @@ export async function materializePlanningEntries({
     }
   }
 
-  const planUpdates = getAllPlanRemainingUpdates(installmentPlans, transactions);
+  const planUpdates = getAllPlanRemainingUpdates(installmentPlans, effectiveTransactions);
 
-  if (!generatedTransactions.length && !planUpdates.length) {
-    return { created: 0, updatedPlans: 0 };
+  if (
+    !generatedTransactions.length &&
+    !planUpdates.length &&
+    !duplicateTransactionUpdates.length
+  ) {
+    return { created: 0, updatedPlans: 0, deduped: 0 };
+  }
+
+  if (duplicateTransactionUpdates.length) {
+    await bulkPut("transactions", duplicateTransactionUpdates, { skipInvalid: true });
+    await Promise.all(
+      duplicateTransactionUpdates.map((transaction) =>
+        enqueueSync("transactions", transaction.id),
+      ),
+    );
   }
 
   if (generatedTransactions.length) {
@@ -275,6 +300,7 @@ export async function materializePlanningEntries({
   return {
     created: generatedTransactions.length,
     updatedPlans: planUpdates.length,
+    deduped: duplicateTransactionUpdates.length,
   };
 }
 
@@ -362,4 +388,65 @@ function addFrequency(dateInput, frequency = "monthly", step = 1) {
   }
 
   return addMonthsToDateInput(dateInput, step);
+}
+
+function buildRecurringTransactionId(ruleId, occurrenceDate) {
+  const safeRule = String(ruleId || "rule")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "_");
+  const safeDate = String(occurrenceDate || "date").replace(/[^0-9]/g, "");
+  return `tx_rule_${safeRule}_${safeDate}`;
+}
+
+function getDuplicatePlanningTransactionUpdates(transactions = []) {
+  const timestamp = nowIso();
+  const candidates = transactions.filter((transaction) => !transaction.isDeleted);
+  const duplicateUpdates = [];
+
+  for (const keySelector of [
+    (transaction) => transaction.recurrenceKey || "",
+    (transaction) =>
+      transaction.installmentPlanId && transaction.installmentNumber
+        ? `plan__${transaction.installmentPlanId}__${transaction.installmentNumber}`
+        : "",
+  ]) {
+    const grouped = new Map();
+
+    for (const transaction of candidates) {
+      const key = keySelector(transaction);
+      if (!key) continue;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(transaction);
+    }
+
+    for (const group of grouped.values()) {
+      if (group.length <= 1) continue;
+
+      const sorted = [...group].sort((a, b) => {
+        const aUpdated = new Date(a.updatedAt || a.createdAt || 0).getTime();
+        const bUpdated = new Date(b.updatedAt || b.createdAt || 0).getTime();
+        if (aUpdated !== bUpdated) return bUpdated - aUpdated;
+        return String(b.id).localeCompare(String(a.id));
+      });
+
+      const keeper = sorted[0]?.id;
+      sorted.slice(1).forEach((transaction) => {
+        if (transaction.id === keeper) return;
+        duplicateUpdates.push({
+          ...transaction,
+          isDeleted: true,
+          updatedAt: timestamp,
+          version: Number(transaction.version || 0) + 1,
+          syncStatus: "pending",
+        });
+      });
+    }
+  }
+
+  const uniqueById = new Map();
+  duplicateUpdates.forEach((transaction) => {
+    uniqueById.set(transaction.id, transaction);
+  });
+
+  return [...uniqueById.values()];
 }

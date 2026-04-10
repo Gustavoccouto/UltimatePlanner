@@ -3,6 +3,7 @@ import { state } from './state.js';
 import { monthLabel } from './utils/dates.js';
 import { getCurrentUser } from './modules/onboarding.js';
 
+
 const navItems = [
   ['dashboard', 'fa-chart-line', 'Dashboard'],
   ['accounts', 'fa-building-columns', 'Contas'],

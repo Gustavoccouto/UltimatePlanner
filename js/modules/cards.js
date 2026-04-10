@@ -37,6 +37,102 @@ import {
   buildInstallmentPlanView,
 } from "../services/planning.js";
 
+const INSTALLMENT_AMOUNT_MODES = {
+  total: "total",
+  installment: "installment",
+};
+
+function resolveInstallmentAmounts(rawAmount, installmentCount, amountMode) {
+  const normalizedCount = Number(installmentCount || 0);
+  const normalizedAmount = Math.round(Number(rawAmount || 0) * 100) / 100;
+  const safeMode =
+    amountMode === INSTALLMENT_AMOUNT_MODES.installment
+      ? INSTALLMENT_AMOUNT_MODES.installment
+      : INSTALLMENT_AMOUNT_MODES.total;
+
+  if (normalizedAmount <= 0 || normalizedCount < 1) {
+    return { totalAmount: 0, amounts: [] };
+  }
+
+  if (safeMode === INSTALLMENT_AMOUNT_MODES.installment) {
+    const installmentValue = normalizedAmount;
+    const amounts = Array.from({ length: normalizedCount }, () => installmentValue);
+    return {
+      totalAmount:
+        Math.round(installmentValue * normalizedCount * 100) / 100,
+      amounts,
+    };
+  }
+
+  const baseInstallmentValue =
+    Math.round((normalizedAmount / normalizedCount) * 100) / 100;
+  let consumed = 0;
+  const amounts = Array.from({ length: normalizedCount }, (_, index) => {
+    const installmentNumber = index + 1;
+    const amount =
+      installmentNumber === normalizedCount
+        ? Math.round((normalizedAmount - consumed) * 100) / 100
+        : baseInstallmentValue;
+    consumed += amount;
+    return amount;
+  });
+
+  return {
+    totalAmount: Math.round(normalizedAmount * 100) / 100,
+    amounts,
+  };
+}
+
+function bindInstallmentAmountModePreview({
+  modeSelectId,
+  amountInputId,
+  countInputId,
+  labelId,
+  hintId,
+}) {
+  const modeField = document.getElementById(modeSelectId);
+  const amountField = document.getElementById(amountInputId);
+  const countField = document.getElementById(countInputId);
+  const label = document.getElementById(labelId);
+  const hint = document.getElementById(hintId);
+  if (!modeField || !amountField || !countField || !label || !hint) return;
+
+  const sync = () => {
+    const mode =
+      modeField.value === INSTALLMENT_AMOUNT_MODES.installment
+        ? INSTALLMENT_AMOUNT_MODES.installment
+        : INSTALLMENT_AMOUNT_MODES.total;
+    const installmentCount = Number(countField.value || 0);
+    const enteredAmount = Number(amountField.value || 0);
+
+    label.textContent =
+      mode === INSTALLMENT_AMOUNT_MODES.installment
+        ? "Valor de cada parcela"
+        : "Valor total";
+
+    if (enteredAmount > 0 && installmentCount > 0) {
+      const resolved = resolveInstallmentAmounts(
+        enteredAmount,
+        installmentCount,
+        mode,
+      );
+      const firstInstallment = Number(resolved.amounts[0] || 0);
+      hint.textContent = `Resultado: ${installmentCount}x de ${currency(firstInstallment)} • total ${currency(resolved.totalAmount)}`;
+      return;
+    }
+
+    hint.textContent =
+      mode === INSTALLMENT_AMOUNT_MODES.installment
+        ? "Informe quanto vale cada parcela para o app calcular o total automaticamente."
+        : "Informe o valor total para o app distribuir entre as parcelas.";
+  };
+
+  modeField.addEventListener("change", sync);
+  amountField.addEventListener("input", sync);
+  countField.addEventListener("input", sync);
+  sync();
+}
+
 export function renderCards() {
   const cards = deriveCardMetrics(
     state.data.creditCards,
@@ -338,8 +434,19 @@ function openPurchaseModal() {
       <div class="md:col-span-2"><label class="text-sm font-semibold mb-2 block">Descrição</label><input name="description" class="field" placeholder="Ex.: Notebook" required /></div>
       <div><label class="text-sm font-semibold mb-2 block">Cartão</label><select name="cardId" class="select">${cards.map((card) => `<option value="${card.id}">${card.name}</option>`).join("")}</select></div>
       <div><label class="text-sm font-semibold mb-2 block">Categoria</label><input name="category" class="field" placeholder="Tecnologia" /></div>
-      <div><label class="text-sm font-semibold mb-2 block">Valor total</label><input name="totalAmount" type="number" min="0.01" step="0.01" class="field" required /></div>
-      <div><label class="text-sm font-semibold mb-2 block">Parcelas</label><input name="installmentCount" type="number" min="1" max="36" value="1" class="field" required /></div>
+      <div>
+        <label class="text-sm font-semibold mb-2 block">Como informar o valor</label>
+        <select name="amountMode" id="credit-purchase-amount-mode" class="select">
+          <option value="total">Valor total</option>
+          <option value="installment">Valor de cada parcela</option>
+        </select>
+      </div>
+      <div>
+        <label id="credit-purchase-amount-label" class="text-sm font-semibold mb-2 block">Valor total</label>
+        <input id="credit-purchase-amount-input" name="amountValue" type="number" min="0.01" step="0.01" class="field" required />
+        <div id="credit-purchase-amount-hint" class="text-xs text-slate-500 mt-2">Informe o valor total para o app distribuir entre as parcelas.</div>
+      </div>
+      <div><label class="text-sm font-semibold mb-2 block">Parcelas</label><input id="credit-purchase-installment-count" name="installmentCount" type="number" min="1" max="36" value="1" class="field" required /></div>
       <div><label class="text-sm font-semibold mb-2 block">Data da compra</label><input name="purchaseDate" type="date" class="field" value="${formatDateInput()}" required /></div>
       <div class="md:col-span-2"><label class="text-sm font-semibold mb-2 block">Observações</label><textarea name="notes" class="textarea" rows="3"></textarea></div>
       <div class="md:col-span-2 flex justify-end gap-3 pt-2"><button type="button" id="cancel-purchase" class="action-btn">Cancelar</button><button class="action-btn action-btn-primary" type="submit">Salvar compra</button></div>
@@ -352,6 +459,13 @@ function openPurchaseModal() {
   document
     .getElementById("purchase-form")
     ?.addEventListener("submit", savePurchase);
+  bindInstallmentAmountModePreview({
+    modeSelectId: "credit-purchase-amount-mode",
+    amountInputId: "credit-purchase-amount-input",
+    countInputId: "credit-purchase-installment-count",
+    labelId: "credit-purchase-amount-label",
+    hintId: "credit-purchase-amount-hint",
+  });
 }
 
 async function savePurchase(event) {
@@ -360,8 +474,17 @@ async function savePurchase(event) {
     const payload = Object.fromEntries(
       new FormData(event.currentTarget).entries(),
     );
-    const totalAmount = Number(payload.totalAmount);
     const installmentCount = Number(payload.installmentCount);
+    const amountMode =
+      payload.amountMode === INSTALLMENT_AMOUNT_MODES.installment
+        ? INSTALLMENT_AMOUNT_MODES.installment
+        : INSTALLMENT_AMOUNT_MODES.total;
+    const resolvedAmounts = resolveInstallmentAmounts(
+      payload.amountValue,
+      installmentCount,
+      amountMode,
+    );
+    const totalAmount = Number(resolvedAmounts.totalAmount || 0);
     if (totalAmount <= 0 || installmentCount <= 0) {
       throw new Error(
         "Valor e quantidade de parcelas devem ser maiores que zero.",
@@ -396,6 +519,8 @@ async function savePurchase(event) {
       purchaseDate: payload.purchaseDate,
       notes: payload.notes,
       invoiceMonth: firstBillingMonth,
+      amountEntryMode: amountMode,
+      amountEntryValue: Math.round(Number(payload.amountValue || 0) * 100) / 100,
       createdAt: timestamp,
       updatedAt: timestamp,
       version: 1,
@@ -403,17 +528,10 @@ async function savePurchase(event) {
       isDeleted: false,
     };
 
-    const baseInstallmentValue =
-      Math.round((totalAmount / installmentCount) * 100) / 100;
-    let consumed = 0;
     const transactions = Array.from({ length: installmentCount }).map(
       (_, index) => {
         const installmentNumber = index + 1;
-        const amount =
-          installmentNumber === installmentCount
-            ? Math.round((totalAmount - consumed) * 100) / 100
-            : baseInstallmentValue;
-        consumed += amount;
+        const amount = Number(resolvedAmounts.amounts[index] || 0);
         const installmentDate = addMonthsToDateInput(payload.purchaseDate, index);
         return {
           id: createId("tx"),
@@ -1417,324 +1535,32 @@ async function confirmNegativeBalanceForRecord(
   if (!warnings.length) return true;
 
   const warning = warnings[0];
-
   return new Promise((resolve) => {
-    const existing = document.getElementById("negative-balance-confirm-modal");
-    if (existing) existing.remove();
-
-    const modal = document.createElement("div");
-    modal.id = "negative-balance-confirm-modal";
-    modal.innerHTML = `
-      <div class="negative-modal-backdrop">
-        <div class="negative-modal-card" role="dialog" aria-modal="true" aria-labelledby="negative-modal-title">
-          <div class="negative-modal-header">
-            <div class="negative-modal-icon-wrap">
-              <div class="negative-modal-icon">!</div>
-            </div>
-            <div class="negative-modal-title-group">
-              <h3 id="negative-modal-title">Conta ficará negativa</h3>
-              <p>Essa ação pode deixar o saldo da conta abaixo de zero.</p>
-            </div>
-          </div>
-
-          <div class="negative-modal-body">
-            <div class="negative-modal-account">
-              <span class="label">Conta</span>
-              <strong>${escapeHtml(warning.accountName)}</strong>
-            </div>
-
-            <div class="negative-modal-message">
-              Ao ${escapeHtml(actionLabel)}, o sistema identificou que essa movimentação pode deixar a conta negativa.
-            </div>
-
-            <div class="negative-balance-preview">
-              <div class="balance-box">
-                <span class="label">Saldo atual</span>
-                <strong>${currency(warning.currentBalance)}</strong>
-              </div>
-
-              <div class="balance-arrow">→</div>
-
-              <div class="balance-box projected ${
-                warning.projectedBalance < 0 ? "is-negative" : ""
-              }">
-                <span class="label">Saldo projetado</span>
-                <strong>${currency(warning.projectedBalance)}</strong>
-              </div>
-            </div>
-          </div>
-
-          <div class="negative-modal-actions">
-            <button type="button" class="negative-btn negative-btn-secondary" data-action="cancel">
-              Cancelar
-            </button>
-            <button type="button" class="negative-btn negative-btn-danger" data-action="confirm">
-              Continuar mesmo assim
-            </button>
-          </div>
-        </div>
-      </div>
-    `;
-
-    if (!document.getElementById("negative-balance-confirm-styles")) {
-      const style = document.createElement("style");
-      style.id = "negative-balance-confirm-styles";
-      style.textContent = `
-        .negative-modal-backdrop {
-          position: fixed;
-          inset: 0;
-          background: rgba(15, 23, 42, 0.55);
-          backdrop-filter: blur(6px);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 24px;
-          z-index: 99999;
-          animation: negativeFadeIn 0.18s ease-out;
-        }
-
-        .negative-modal-card {
-          width: min(100%, 560px);
-          background: linear-gradient(180deg, #ffffff 0%, #fcfcfd 100%);
-          border: 1px solid rgba(226, 232, 240, 0.95);
-          border-radius: 24px;
-          box-shadow:
-            0 24px 60px rgba(15, 23, 42, 0.20),
-            0 8px 24px rgba(15, 23, 42, 0.10);
-          overflow: hidden;
-          animation: negativeScaleIn 0.2s ease-out;
-        }
-
-        .negative-modal-header {
-          display: flex;
-          gap: 16px;
-          align-items: center;
-          padding: 24px 24px 18px;
-          background:
-            radial-gradient(circle at top left, rgba(239, 68, 68, 0.12), transparent 45%),
-            linear-gradient(180deg, #fff7f7 0%, #ffffff 100%);
-          border-bottom: 1px solid rgba(241, 245, 249, 1);
-        }
-
-        .negative-modal-icon-wrap {
-          flex-shrink: 0;
-        }
-
-        .negative-modal-icon {
-          width: 56px;
-          height: 56px;
-          border-radius: 18px;
-          display: grid;
-          place-items: center;
-          font-size: 28px;
-          font-weight: 800;
-          color: #b91c1c;
-          background: linear-gradient(180deg, #fee2e2 0%, #fecaca 100%);
-          box-shadow: inset 0 1px 0 rgba(255,255,255,0.8);
-        }
-
-        .negative-modal-title-group h3 {
-          margin: 0;
-          font-size: 1.3rem;
-          line-height: 1.2;
-          color: #0f172a;
-        }
-
-        .negative-modal-title-group p {
-          margin: 6px 0 0;
-          color: #475569;
-          font-size: 0.96rem;
-        }
-
-        .negative-modal-body {
-          padding: 22px 24px 10px;
-        }
-
-        .negative-modal-account {
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-          padding: 14px 16px;
-          border-radius: 16px;
-          background: #f8fafc;
-          border: 1px solid #e2e8f0;
-          margin-bottom: 16px;
-        }
-
-        .negative-modal-message {
-          color: #334155;
-          font-size: 0.97rem;
-          line-height: 1.5;
-          margin-bottom: 18px;
-        }
-
-        .negative-balance-preview {
-          display: grid;
-          grid-template-columns: 1fr auto 1fr;
-          gap: 12px;
-          align-items: center;
-        }
-
-        .balance-box {
-          padding: 16px;
-          border-radius: 18px;
-          background: #f8fafc;
-          border: 1px solid #e2e8f0;
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-        }
-
-        .balance-box strong {
-          font-size: 1.18rem;
-          color: #0f172a;
-        }
-
-        .balance-box.projected.is-negative {
-          background: linear-gradient(180deg, #fff1f2 0%, #ffe4e6 100%);
-          border-color: #fecdd3;
-        }
-
-        .balance-box.projected.is-negative strong {
-          color: #b91c1c;
-        }
-
-        .balance-arrow {
-          font-size: 1.4rem;
-          color: #94a3b8;
-          font-weight: 700;
-        }
-
-        .label {
-          font-size: 0.8rem;
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-          color: #64748b;
-        }
-
-        .negative-modal-actions {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 14px;
-          padding: 20px 24px 24px;
-        }
-
-        .negative-btn {
-          border: none;
-          border-radius: 18px;
-          min-height: 60px;
-          padding: 16px 18px;
-          font-size: 1rem;
-          font-weight: 800;
-          cursor: pointer;
-          transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
-        }
-
-        .negative-btn:hover {
-          transform: translateY(-1px);
-        }
-
-        .negative-btn:active {
-          transform: translateY(0);
-        }
-
-        .negative-btn-secondary {
-          background: #eef2f7;
-          color: #0f172a;
-          box-shadow: inset 0 0 0 1px #dbe2ea;
-        }
-
-        .negative-btn-secondary:hover {
-          background: #e2e8f0;
-        }
-
-        .negative-btn-danger {
-          background: linear-gradient(180deg, #ef4444 0%, #dc2626 100%);
-          color: white;
-          box-shadow: 0 12px 24px rgba(220, 38, 38, 0.28);
-        }
-
-        .negative-btn-danger:hover {
-          box-shadow: 0 16px 28px rgba(220, 38, 38, 0.34);
-        }
-
-        @keyframes negativeFadeIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-
-        @keyframes negativeScaleIn {
-          from {
-            opacity: 0;
-            transform: translateY(10px) scale(0.98);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-          }
-        }
-
-        @media (max-width: 640px) {
-          .negative-modal-card {
-            border-radius: 20px;
-          }
-
-          .negative-balance-preview {
-            grid-template-columns: 1fr;
-          }
-
-          .balance-arrow {
-            display: none;
-          }
-
-          .negative-modal-actions {
-            grid-template-columns: 1fr;
-          }
-        }
-      `;
-      document.head.appendChild(style);
-    }
-
-    const root = document.getElementById("modal-root") || document.body;
-    root.appendChild(modal);
-
-    const backdrop = modal.querySelector(".negative-modal-backdrop");
-    const confirmBtn = modal.querySelector('[data-action="confirm"]');
-    const cancelBtn = modal.querySelector('[data-action="cancel"]');
-
-    let settled = false;
-
-    const cleanup = (result) => {
-      if (settled) return;
-      settled = true;
-      document.removeEventListener("keydown", onKeyDown);
-      modal.remove();
-      resolve(result);
-    };
-
-    const onKeyDown = (event) => {
-      if (event.key === "Escape") cleanup(false);
-      if (event.key === "Enter") cleanup(true);
-    };
-
-    confirmBtn?.addEventListener("click", () => cleanup(true), { once: true });
-    cancelBtn?.addEventListener("click", () => cleanup(false), { once: true });
-
-    backdrop?.addEventListener("click", (event) => {
-      if (event.target === backdrop) cleanup(false);
+    confirmDialog({
+      title: "Conta ficará negativa",
+      message: `Ao ${actionLabel}, a conta <strong>${warning.accountName}</strong> pode ficar negativa.<br><br>Saldo atual ${currency(
+        warning.currentBalance,
+      )} → saldo projetado ${currency(
+        warning.projectedBalance,
+      )}<br><br>Deseja continuar mesmo assim?`,
+      confirmText: "Continuar mesmo negativo",
+      tone: "danger",
+      onConfirm: async () => {
+        resolve(true);
+      },
     });
 
-    document.addEventListener("keydown", onKeyDown);
-    confirmBtn?.focus();
+    document.getElementById("confirm-cancel-btn")?.addEventListener(
+      "click",
+      () => resolve(false),
+      { once: true },
+    );
+    document.querySelector("#modal-root .modal-backdrop")?.addEventListener(
+      "click",
+      (event) => {
+        if (event.target.classList.contains("modal-backdrop")) resolve(false);
+      },
+      { once: true },
+    );
   });
-}
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
 }

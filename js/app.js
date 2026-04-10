@@ -6,8 +6,18 @@ import {
   patchUi,
   setSelectedMonth,
 } from "./state.js";
-import { renderShell, renderTopbar, toast, openMobileDrawer } from "./ui.js";
-import { renderDashboard, mountDashboardCharts } from "./modules/dashboard.js";
+import {
+  renderShell,
+  renderTopbar,
+  toast,
+  openMobileDrawer,
+  closeMobileDrawer,
+} from "./ui.js";
+import {
+  renderDashboard,
+  bindDashboardEvents,
+  mountDashboardCharts,
+} from "./modules/dashboard.js";
 import { renderAccounts, bindAccountsEvents } from "./modules/accounts.js";
 import {
   renderTransactions,
@@ -29,6 +39,7 @@ import {
   hasPendingSync,
   pullRemoteIntoLocal,
 } from "./services/sync.js";
+import { subscribeToExternalStorageChanges } from "./services/storage.js";
 import { SheetsService } from "./services/sheets.js";
 import { seedDemoData } from "./seed.js";
 import {
@@ -53,8 +64,14 @@ const routeMap = {
   search: renderSearch,
 };
 
+const REMOTE_PULL_INTERVAL_MS = Math.max(APP_CONFIG.syncIntervalMs * 2, 30000);
+
 let syncLoopHandle = null;
 let syncInFlight = false;
+let lastRemotePullAt = 0;
+let externalStorageUnsubscribe = null;
+let externalReloadTimer = null;
+let externalReloadInFlight = false;
 
 function renderApp() {
   renderShell();
@@ -75,6 +92,7 @@ function renderApp() {
 }
 
 function bindViewEvents() {
+  bindDashboardEvents();
   bindAccountsEvents();
   bindTransactionsEvents();
   bindCardsEvents();
@@ -108,15 +126,28 @@ function bindViewEvents() {
   );
 
   document
-    .getElementById("open-onboarding-btn")
-    ?.addEventListener("click", () => openOnboardingModal(renderApp));
-  document
     .getElementById("mobile-menu-btn")
     ?.addEventListener("click", openMobileDrawer);
   document
-    .getElementById("global-month-picker")
-    ?.addEventListener("change", (event) => {
-      setSelectedMonth(event.target.value);
+    .querySelectorAll("#open-onboarding-btn, #open-mobile-onboarding-btn")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        closeMobileDrawer();
+        openOnboardingModal(renderApp);
+      });
+    });
+
+  document
+    .querySelectorAll("#global-month-picker, #mobile-month-picker")
+    .forEach((input) => {
+      input.addEventListener("change", (event) => {
+        const nextMonth = event.target.value;
+        if (!nextMonth) return;
+        setSelectedMonth(nextMonth);
+        if (event.target.id === "mobile-month-picker") {
+          closeMobileDrawer();
+        }
+      });
     });
 }
 
@@ -141,6 +172,7 @@ async function bootstrap() {
   renderApp();
   await loadState();
   setupConnectivity();
+  setupExternalStateWatchers();
 
   if (!getCurrentUser()) {
     await new Promise((resolve) => {
@@ -163,6 +195,39 @@ function setupConnectivity() {
   );
 }
 
+function setupExternalStateWatchers() {
+  if (!externalStorageUnsubscribe) {
+    externalStorageUnsubscribe = subscribeToExternalStorageChanges(() => {
+      scheduleExternalReload("Dados atualizados em outra aba");
+    });
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      maybePullRemoteUpdates(true).catch((error) => {
+        console.error(error);
+      });
+    }
+  });
+}
+
+function scheduleExternalReload(label) {
+  window.clearTimeout(externalReloadTimer);
+  externalReloadTimer = window.setTimeout(async () => {
+    if (externalReloadInFlight || state.ui.loading) return;
+
+    externalReloadInFlight = true;
+    try {
+      await loadState();
+      patchUi({ integrationLabel: label });
+    } catch (error) {
+      console.error(error);
+    } finally {
+      externalReloadInFlight = false;
+    }
+  }, 220);
+}
+
 async function initIntegration() {
   if (state.ui.offline) {
     patchUi({ integrationStatus: "offline", integrationLabel: "Offline" });
@@ -176,6 +241,7 @@ async function initIntegration() {
     });
     await SheetsService.init();
     const result = await pullRemoteIntoLocal();
+    lastRemotePullAt = Date.now();
     await loadState();
     patchUi({
       integrationStatus: "online",
@@ -193,6 +259,32 @@ async function initIntegration() {
   }
 }
 
+async function maybePullRemoteUpdates(force = false) {
+  if (
+    state.ui.offline ||
+    state.ui.integrationStatus === "error" ||
+    state.ui.integrationStatus === "testing"
+  ) {
+    return { changed: 0 };
+  }
+
+  const now = Date.now();
+  if (!force && now - lastRemotePullAt < REMOTE_PULL_INTERVAL_MS) {
+    return { changed: 0 };
+  }
+
+  lastRemotePullAt = now;
+  const result = await pullRemoteIntoLocal();
+  if (result.changed) {
+    await loadState();
+    patchUi({
+      integrationStatus: "online",
+      integrationLabel: `${result.changed} item(ns) recebidos da nuvem`,
+    });
+  }
+  return result;
+}
+
 async function runSyncLoop() {
   if (
     syncInFlight ||
@@ -203,13 +295,17 @@ async function runSyncLoop() {
     return;
   }
 
-  const pending = await hasPendingSync();
-  if (!pending) return;
-
   syncInFlight = true;
   let result = null;
 
   try {
+    const pending = await hasPendingSync();
+
+    if (!pending) {
+      await maybePullRemoteUpdates();
+      return;
+    }
+
     patchUi({ syncing: true, integrationLabel: "Sincronizando alterações…" });
     result = await processSyncQueue();
 
@@ -239,8 +335,12 @@ async function runSyncLoop() {
   } finally {
     syncInFlight = false;
     patchUi({ syncing: false });
+
     if (result?.processed || result?.failed || result?.cleaned) {
       await loadState();
+      await maybePullRemoteUpdates(true).catch((error) => {
+        console.error(error);
+      });
     }
   }
 }

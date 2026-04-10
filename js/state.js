@@ -75,6 +75,7 @@ export async function loadState() {
   notify();
 
   await hydrateStateData();
+
   const planningResult = await materializePlanningEntries({
     preferences: state.data.preferences,
     installmentPlans: state.data.installmentPlans,
@@ -82,7 +83,11 @@ export async function loadState() {
     creditCards: state.data.creditCards,
   });
 
-  if (planningResult.created || planningResult.updatedPlans) {
+  if (
+    planningResult.created ||
+    planningResult.updatedPlans ||
+    planningResult.deduped
+  ) {
     await hydrateStateData();
   }
 
