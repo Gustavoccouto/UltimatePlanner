@@ -1,7 +1,8 @@
-import { APP_CONFIG, ENTITY_STORES, getWorkspaceKey } from "../config.js";
+import { ENTITY_STORES, getWorkspaceKey } from "../config.js";
 
-let dbPromise;
-let currentDbName = null;
+const MEMORY_STORES = new Map(
+  ENTITY_STORES.map((storeName) => [storeName, new Map()]),
+);
 
 const STORE_PREFIX = {
   accounts: "acct",
@@ -21,18 +22,11 @@ const STORE_PREFIX = {
   meta: "meta",
 };
 
-const STORAGE_SIGNAL_KEY = "ultimateplanner_storage_signal";
-const STORAGE_CHANNEL_NAME = "ultimateplanner_storage_channel";
-const LOCAL_SOURCE_ID = `tab_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-
-let storageChannel = null;
-
-function getStorageChannel() {
-  if (typeof BroadcastChannel === "undefined") return null;
-  if (!storageChannel) {
-    storageChannel = new BroadcastChannel(STORAGE_CHANNEL_NAME);
+function getStore(storeName) {
+  if (!MEMORY_STORES.has(storeName)) {
+    MEMORY_STORES.set(storeName, new Map());
   }
-  return storageChannel;
+  return MEMORY_STORES.get(storeName);
 }
 
 function createGeneratedId(storeName) {
@@ -41,12 +35,7 @@ function createGeneratedId(storeName) {
 }
 
 function hasValidId(record) {
-  return (
-    !!record &&
-    record.id !== undefined &&
-    record.id !== null &&
-    String(record.id).trim() !== ""
-  );
+  return !!record && record.id !== undefined && record.id !== null && String(record.id).trim() !== "";
 }
 
 function normalizeRecord(storeName, record, { allowGenerateId = false } = {}) {
@@ -68,245 +57,74 @@ function normalizeRecord(storeName, record, { allowGenerateId = false } = {}) {
     normalized.updatedAt = new Date().toISOString();
   }
 
-  if (!normalized.workspaceKey) {
+  if (!normalized.workspaceKey && storeName !== "preferences" && storeName !== "meta") {
     normalized.workspaceKey = getWorkspaceKey();
   }
 
   return normalized;
 }
 
-function getScopedDbName() {
-  const workspaceKey = String(getWorkspaceKey() || "guest")
-    .trim()
-    .toLowerCase();
-  return `${APP_CONFIG.dbName}__${workspaceKey}`;
-}
-
-function createStorageSignal(reason = "write") {
-  return {
-    type: "workspace-storage-changed",
-    dbName: getScopedDbName(),
-    workspaceKey: getWorkspaceKey(),
-    reason,
-    sourceId: LOCAL_SOURCE_ID,
-    at: Date.now(),
-  };
-}
-
-function notifyStorageMutation(reason = "write") {
-  const payload = createStorageSignal(reason);
-
-  try {
-    localStorage.setItem(STORAGE_SIGNAL_KEY, JSON.stringify(payload));
-  } catch {
-    // noop
-  }
-
-  try {
-    getStorageChannel()?.postMessage(payload);
-  } catch {
-    // noop
-  }
-}
-
-function openDb(dbName) {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(dbName, APP_CONFIG.dbVersion);
-
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
-      ENTITY_STORES.forEach((storeName) => {
-        if (!db.objectStoreNames.contains(storeName)) {
-          const store = db.createObjectStore(storeName, { keyPath: "id" });
-          store.createIndex("updatedAt", "updatedAt", { unique: false });
-          store.createIndex("syncStatus", "syncStatus", { unique: false });
-        }
-      });
-    };
-
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
 export function resetDbConnection() {
-  dbPromise = null;
-  currentDbName = null;
+  ENTITY_STORES.forEach((storeName) => {
+    getStore(storeName).clear();
+  });
 }
 
 export async function getDb() {
-  const scopedName = getScopedDbName();
-  if (!dbPromise || currentDbName !== scopedName) {
-    dbPromise = openDb(scopedName);
-    currentDbName = scopedName;
-  }
-  return dbPromise;
+  return null;
 }
 
 export async function deleteCurrentWorkspaceDb() {
-  const dbName = getScopedDbName();
-
-  try {
-    const db = await dbPromise;
-    db?.close?.();
-  } catch {
-    // noop
-  }
-
   resetDbConnection();
-
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.deleteDatabase(dbName);
-
-    request.onsuccess = () => {
-      notifyStorageMutation("delete-db");
-      resolve(true);
-    };
-
-    request.onerror = () =>
-      reject(
-        request.error ||
-          new Error("Não foi possível excluir a base local do workspace."),
-      );
-
-    request.onblocked = () =>
-      reject(
-        new Error(
-          "A base local está em uso por outra aba. Feche as outras abas do app e tente novamente.",
-        ),
-      );
-  });
+  return true;
 }
 
 export async function getAll(storeName) {
-  const db = await getDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, "readonly");
-    const store = tx.objectStore(storeName);
-    const request = store.getAll();
-    request.onsuccess = () => resolve(request.result || []);
-    request.onerror = () => reject(request.error);
-  });
+  return Array.from(getStore(storeName).values()).map((record) => ({ ...record }));
 }
 
 export async function getOne(storeName, id) {
-  const db = await getDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, "readonly");
-    const request = tx.objectStore(storeName).get(id);
-    request.onsuccess = () => resolve(request.result || null);
-    request.onerror = () => reject(request.error);
-  });
+  const record = getStore(storeName).get(id);
+  return record ? { ...record } : null;
 }
 
 export async function putOne(storeName, record, options = {}) {
   const normalized = normalizeRecord(storeName, record, options);
-  const db = await getDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, "readwrite");
-    tx.objectStore(storeName).put(normalized);
-    tx.oncomplete = () => {
-      notifyStorageMutation(`put:${storeName}`);
-      resolve(normalized);
-    };
-    tx.onerror = () => reject(tx.error || new Error(`Falha ao salvar em ${storeName}.`));
-    tx.onabort = () => reject(tx.error || new Error(`Transação abortada em ${storeName}.`));
-  });
+  getStore(storeName).set(normalized.id, normalized);
+  return { ...normalized };
 }
 
 export async function bulkPut(storeName, records = [], options = {}) {
   const { skipInvalid = false, allowGenerateId = false } = options;
-  const db = await getDb();
+  const accepted = [];
 
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, "readwrite");
-    const store = tx.objectStore(storeName);
-    const accepted = [];
-
-    for (const record of records || []) {
-      try {
-        const normalized = normalizeRecord(storeName, record, {
-          allowGenerateId,
-        });
-        store.put(normalized);
-        accepted.push(normalized);
-      } catch (error) {
-        if (!skipInvalid) {
-          tx.abort();
-          reject(error);
-          return;
-        }
+  for (const record of records || []) {
+    try {
+      const normalized = normalizeRecord(storeName, record, { allowGenerateId });
+      getStore(storeName).set(normalized.id, normalized);
+      accepted.push({ ...normalized });
+    } catch (error) {
+      if (!skipInvalid) {
+        throw error;
       }
     }
+  }
 
-    tx.oncomplete = () => {
-      if (accepted.length) {
-        notifyStorageMutation(`bulk:${storeName}`);
-      }
-      resolve(accepted);
-    };
-    tx.onerror = () => reject(tx.error || new Error(`Falha em lote na store ${storeName}.`));
-    tx.onabort = () =>
-      reject(tx.error || new Error(`Transação abortada na store ${storeName}.`));
-  });
+  return accepted;
 }
 
 export async function removeOne(storeName, id) {
-  const db = await getDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, "readwrite");
-    tx.objectStore(storeName).delete(id);
-    tx.oncomplete = () => {
-      notifyStorageMutation(`remove:${storeName}`);
-      resolve(true);
-    };
-    tx.onerror = () => reject(tx.error);
-  });
+  getStore(storeName).delete(id);
+  return true;
 }
 
 export async function clearStore(storeName) {
-  const db = await getDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, "readwrite");
-    tx.objectStore(storeName).clear();
-    tx.oncomplete = () => {
-      notifyStorageMutation(`clear:${storeName}`);
-      resolve(true);
-    };
-    tx.onerror = () => reject(tx.error);
-  });
+  getStore(storeName).clear();
+  return true;
 }
 
-export function subscribeToExternalStorageChanges(listener) {
-  if (typeof listener !== "function") {
-    return () => {};
-  }
-
-  const handlePayload = (payload) => {
-    if (!payload || payload.sourceId === LOCAL_SOURCE_ID) return;
-    if (payload.dbName !== getScopedDbName()) return;
-    listener(payload);
-  };
-
-  const onStorage = (event) => {
-    if (event.key !== STORAGE_SIGNAL_KEY || !event.newValue) return;
-    try {
-      handlePayload(JSON.parse(event.newValue));
-    } catch {
-      // noop
-    }
-  };
-
-  const channel = getStorageChannel();
-  const onChannelMessage = (event) => handlePayload(event.data);
-
-  window.addEventListener("storage", onStorage);
-  channel?.addEventListener("message", onChannelMessage);
-
-  return () => {
-    window.removeEventListener("storage", onStorage);
-    channel?.removeEventListener("message", onChannelMessage);
-  };
+export function subscribeToExternalStorageChanges(_listener) {
+  return () => {};
 }
 
 export function isValidStoreRecord(record) {

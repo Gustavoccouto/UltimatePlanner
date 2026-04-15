@@ -34,6 +34,7 @@ import {
   getFrequencyLabel,
   getRuleTypeLabel,
   getNextOccurrenceDate,
+  getRecurringRuleFutureCleanupUpdates,
 } from "../services/planning.js";
 
 const INSTALLMENT_AMOUNT_MODES = {
@@ -953,21 +954,43 @@ function confirmDeleteRecurringRule(ruleId) {
   confirmDialog({
     title: "Excluir recorrência",
     message:
-      "A regra será marcada como excluída. Os lançamentos já gerados permanecem preservados.",
+      "A regra será marcada como excluída. Lançamentos futuros gerados por ela também serão removidos, mantendo apenas o histórico anterior.",
     confirmText: "Excluir regra",
     onConfirm: async () => {
       const existing = await getOne("preferences", ruleId);
       if (!existing) return;
+
+      const timestamp = nowIso();
       await putOne("preferences", {
         ...existing,
         isDeleted: true,
-        updatedAt: nowIso(),
+        updatedAt: timestamp,
         version: (existing.version || 0) + 1,
         syncStatus: "pending",
       });
       await enqueueSync("preferences", ruleId);
+
+      const futureGeneratedUpdates = getRecurringRuleFutureCleanupUpdates(
+        ruleId,
+        state.data.transactions,
+      );
+
+      if (futureGeneratedUpdates.length) {
+        await bulkPut("transactions", futureGeneratedUpdates, { skipInvalid: true });
+        await Promise.all(
+          futureGeneratedUpdates.map((transaction) =>
+            enqueueSync("transactions", transaction.id),
+          ),
+        );
+      }
+
       await loadState();
-      toast("Regra recorrente excluída.", "success");
+      toast(
+        futureGeneratedUpdates.length
+          ? "Recorrência excluída e lançamentos futuros removidos."
+          : "Recorrência excluída.",
+        "success",
+      );
     },
   });
 }

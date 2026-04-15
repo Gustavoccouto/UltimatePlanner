@@ -3,7 +3,6 @@ import { state } from './state.js';
 import { monthLabel } from './utils/dates.js';
 import { getCurrentUser } from './modules/onboarding.js';
 
-
 const navItems = [
   ['dashboard', 'fa-chart-line', 'Dashboard'],
   ['accounts', 'fa-building-columns', 'Contas'],
@@ -35,7 +34,10 @@ const toastMetaByType = {
   },
 };
 
+let mobileDrawerStylesInjected = false;
+
 export function renderShell() {
+  ensureMobileDrawerStyles();
   renderSidebar();
   renderTopbar();
   renderMobileNav();
@@ -92,12 +94,12 @@ export function renderTopbar() {
   const currentUser = getCurrentUser();
   topbar.innerHTML = `
     <div class="h-full flex items-center gap-4 px-4 lg:px-6 py-4">
-      <button id="mobile-menu-btn" class="lg:hidden action-btn h-11 w-11 !p-0 flex items-center justify-center"><i class="fa-solid fa-bars"></i></button>
+      <button id="mobile-menu-btn" class="lg:hidden action-btn h-11 w-11 !p-0 flex items-center justify-center" type="button" aria-label="Abrir menu"><i class="fa-solid fa-bars"></i></button>
       <div class="search-shell">
         <i class="fa-solid fa-magnifying-glass text-slate-400"></i>
         <input id="global-search-input" class="w-full bg-transparent outline-none" placeholder="Buscar em contas, transações, cartões, metas e projetos" value="${state.ui.query || ''}" />
       </div>
-      <div class="topbar-month-filter">
+      <div class="topbar-month-filter max-md:hidden">
         <span class="text-slate-400 text-xs">Mês</span>
         <input id="global-month-picker" type="month" value="${state.ui.selectedMonth}" class="month-field" />
       </div>
@@ -123,7 +125,7 @@ export function renderMobileNav() {
         <button data-route="${route}" class="rounded-2xl px-2 py-2 ${state.route === route ? 'bg-emerald-50 text-emerald-700' : 'text-slate-500'}">
           <i class="fa-solid ${icon} block mb-1"></i>${label}
         </button>`).join('')}
-      <button id="mobile-more-btn" class="rounded-2xl px-2 py-2 text-slate-500"><i class="fa-solid fa-ellipsis block mb-1"></i>Mais</button>
+      <button id="mobile-more-btn" class="rounded-2xl px-2 py-2 text-slate-500" type="button"><i class="fa-solid fa-ellipsis block mb-1"></i>Mais</button>
     </div>`;
 
   bindNav(mobileNav);
@@ -132,6 +134,8 @@ export function renderMobileNav() {
 
 export function renderMobileDrawer() {
   let drawer = document.getElementById('mobile-drawer');
+  const currentUser = getCurrentUser();
+
   if (!drawer) {
     drawer = document.createElement('div');
     drawer.id = 'mobile-drawer';
@@ -142,14 +146,39 @@ export function renderMobileDrawer() {
   drawer.innerHTML = `
     <div class="mobile-drawer-backdrop"></div>
     <div class="mobile-drawer-panel">
-      <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center justify-between mb-4 gap-3">
         <div>
           <div class="text-sm text-slate-500">Navegação</div>
-          <div class="text-xl font-bold">Mais módulos</div>
+          <div class="text-xl font-bold">Menu rápido</div>
         </div>
-        <button id="close-mobile-drawer" class="action-btn h-10 w-10 !p-0"><i class="fa-solid fa-xmark"></i></button>
+        <button id="close-mobile-drawer" class="action-btn h-10 w-10 !p-0 flex items-center justify-center" type="button" aria-label="Fechar menu"><i class="fa-solid fa-xmark"></i></button>
       </div>
-      <div class="grid grid-cols-2 gap-2">${navItems.map(navDrawerButton).join('')}</div>
+
+      <div class="mobile-drawer-stack">
+        <section class="card p-4 surface-soft">
+          <div class="text-xs uppercase tracking-[0.2em] text-slate-400">Perfil ativo</div>
+          <div class="flex items-center gap-3 mt-3">
+            <span class="user-pick-avatar">${(currentUser?.name || 'U').slice(0,1).toUpperCase()}</span>
+            <div class="min-w-0 flex-1">
+              <div class="font-bold text-slate-900 truncate">${currentUser?.name || 'Sem perfil'}</div>
+              <button id="open-mobile-onboarding-btn" class="text-sm text-emerald-600 font-semibold mt-0.5" type="button">trocar perfil</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card p-4">
+          <div class="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <div class="text-xs uppercase tracking-[0.2em] text-slate-400">Competência</div>
+              <div class="font-bold text-slate-900 mt-1">Escolher mês</div>
+            </div>
+            <span class="badge badge-muted">${monthLabel(state.ui.selectedMonth)}</span>
+          </div>
+          <input id="mobile-month-picker" type="month" value="${state.ui.selectedMonth}" class="month-field w-full" />
+        </section>
+
+        <div class="grid grid-cols-2 gap-2">${navItems.map(navDrawerButton).join('')}</div>
+      </div>
     </div>`;
 
   drawer.querySelector('.mobile-drawer-backdrop')?.addEventListener('click', closeMobileDrawer);
@@ -278,4 +307,87 @@ export function pageHeader(title, subtitle, actions = '') {
       </div>
       <div class="flex items-center gap-3 flex-wrap justify-end">${actions}</div>
     </div>`;
+}
+
+function ensureMobileDrawerStyles() {
+  if (mobileDrawerStylesInjected || document.getElementById('mobile-nav-runtime-styles')) return;
+
+  const style = document.createElement('style');
+  style.id = 'mobile-nav-runtime-styles';
+  style.textContent = `
+    #mobile-drawer.mobile-drawer {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      pointer-events: none;
+    }
+
+    #mobile-drawer .mobile-drawer-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.38);
+      opacity: 0;
+      transition: opacity .22s ease;
+    }
+
+    #mobile-drawer .mobile-drawer-panel {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
+      border-radius: 28px;
+      background: rgba(255, 255, 255, 0.98);
+      box-shadow: 0 28px 80px rgba(15, 23, 42, 0.2);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      padding: 18px;
+      transform: translateY(24px);
+      opacity: 0;
+      transition: transform .22s ease, opacity .22s ease;
+      max-height: calc(100dvh - 24px);
+      overflow-y: auto;
+      padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    }
+
+    #mobile-drawer.is-open {
+      pointer-events: auto;
+    }
+
+    #mobile-drawer.is-open .mobile-drawer-backdrop {
+      opacity: 1;
+    }
+
+    #mobile-drawer.is-open .mobile-drawer-panel {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    body.drawer-open {
+      overflow: hidden;
+    }
+
+    .mobile-drawer-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    @media (min-width: 1024px) {
+      #mobile-drawer.mobile-drawer,
+      .mobile-nav {
+        display: none !important;
+      }
+    }
+
+    @media (max-width: 640px) {
+      #mobile-drawer .mobile-drawer-panel {
+        left: 10px;
+        right: 10px;
+        bottom: 10px;
+        border-radius: 26px;
+      }
+    }
+  `;
+
+  document.head.appendChild(style);
+  mobileDrawerStylesInjected = true;
 }

@@ -1,13 +1,12 @@
-import { getAll, putOne, bulkPut, isValidStoreRecord } from "./storage.js";
+import { getAll, putOne, bulkPut, clearStore, isValidStoreRecord } from "./storage.js";
 import { SheetsService } from "./sheets.js";
 import { nowIso } from "../utils/dates.js";
 import { createId } from "../utils/ids.js";
-import { APP_CONFIG, ENTITY_STORES } from "../config.js";
+import { ENTITY_STORES } from "../config.js";
 
-const REMOTE_SYNCABLE = ENTITY_STORES.filter(
-  (name) => !["syncQueue", "syncErrors", "meta"].includes(name),
-);
-const REMOTE_BATCH_SIZE = Math.max(1, Number(APP_CONFIG.maxSyncBatchSize || 1));
+const LOCAL_ONLY_STORES = new Set(["syncQueue", "syncErrors"]);
+const REMOTE_SYNCABLE = ENTITY_STORES.filter((name) => !LOCAL_ONLY_STORES.has(name));
+const REMOTE_BATCH_SIZE = 1;
 
 async function logSyncError(entity, recordId, message) {
   await putOne(
@@ -24,10 +23,6 @@ async function logSyncError(entity, recordId, message) {
   );
 }
 
-function getQueueIdentity(item) {
-  return `${item.entity}::${item.recordId}::${item.action || "upsert"}`;
-}
-
 export async function enqueueSync(storeName, recordId, action = "upsert") {
   if (!recordId) {
     await logSyncError(
@@ -38,24 +33,7 @@ export async function enqueueSync(storeName, recordId, action = "upsert") {
     throw new Error(`Não foi possível sincronizar "${storeName}": id ausente.`);
   }
 
-  const queue = await getAll("syncQueue");
-  const existing = queue.find(
-    (item) =>
-      item.entity === storeName &&
-      item.recordId === recordId &&
-      (item.action || "upsert") === action &&
-      item.syncStatus !== "done",
-  );
-
-  if (existing) {
-    return putOne("syncQueue", {
-      ...existing,
-      syncStatus: "pending",
-      updatedAt: nowIso(),
-    });
-  }
-
-  return putOne("syncQueue", {
+  await putOne("syncQueue", {
     id: createId("sync"),
     entity: storeName,
     recordId,
@@ -71,39 +49,20 @@ export async function hasPendingSync() {
   return queue.some((item) => item.syncStatus !== "done");
 }
 
+function buildDeleteTombstone(item) {
+  return {
+    id: item.recordId,
+    isDeleted: true,
+    updatedAt: nowIso(),
+    syncUpdatedAt: nowIso(),
+  };
+}
+
 export async function processSyncQueue() {
-  const queue = (await getAll("syncQueue"))
-    .filter((item) => item.syncStatus !== "done")
-    .sort(
-      (a, b) =>
-        new Date(a.updatedAt || a.createdAt || 0) -
-        new Date(b.updatedAt || b.createdAt || 0),
-    );
+  const queue = (await getAll("syncQueue")).filter((item) => item.syncStatus !== "done");
+  if (!queue.length) return { processed: 0, failed: 0 };
 
-  if (!queue.length) return { processed: 0, failed: 0, cleaned: 0 };
-
-  const latestItems = new Map();
-  for (const item of queue) {
-    latestItems.set(getQueueIdentity(item), item);
-  }
-
-  const dedupedQueue = [...latestItems.values()];
-  const latestIds = new Set(dedupedQueue.map((item) => item.id));
-  const duplicatedItems = queue.filter((item) => !latestIds.has(item.id));
-
-  if (duplicatedItems.length) {
-    await bulkPut(
-      "syncQueue",
-      duplicatedItems.map((item) => ({
-        ...item,
-        syncStatus: "done",
-        updatedAt: nowIso(),
-      })),
-      { skipInvalid: true },
-    );
-  }
-
-  const grouped = dedupedQueue.reduce((acc, item) => {
+  const grouped = queue.reduce((acc, item) => {
     if (!item?.entity) return acc;
     if (!acc[item.entity]) acc[item.entity] = [];
     acc[item.entity].push(item);
@@ -121,33 +80,44 @@ export async function processSyncQueue() {
 
     for (let index = 0; index < items.length; index += REMOTE_BATCH_SIZE) {
       const chunk = items.slice(index, index + REMOTE_BATCH_SIZE);
-      const validPayload = [];
-      const doneWithoutSync = [];
+      const payloadMap = new Map();
 
       for (const item of chunk) {
         const record = recordMap.get(item.recordId);
-        if (!record || !record.id) {
-          await logSyncError(
-            item.entity,
-            item.recordId,
-            `Registro ausente ou inválido para sincronização em ${item.entity}.`,
-          );
-          doneWithoutSync.push({
-            ...item,
-            syncStatus: "done",
-            updatedAt: nowIso(),
+
+        if (record && record.id) {
+          payloadMap.set(record.id, {
+            ...record,
+            syncUpdatedAt: nowIso(),
           });
           continue;
         }
 
-        validPayload.push({ ...record, syncUpdatedAt: nowIso() });
+        if (item.action === "delete") {
+          payloadMap.set(item.recordId, buildDeleteTombstone(item));
+          continue;
+        }
+
+        await logSyncError(
+          item.entity,
+          item.recordId,
+          `Registro ausente ou inválido para sincronização em ${item.entity}.`,
+        );
       }
 
-      if (doneWithoutSync.length) {
-        await bulkPut("syncQueue", doneWithoutSync, { skipInvalid: true });
+      const validPayload = [...payloadMap.values()];
+      if (!validPayload.length) {
+        await bulkPut(
+          "syncQueue",
+          chunk.map((item) => ({
+            ...item,
+            syncStatus: "done",
+            updatedAt: nowIso(),
+          })),
+          { skipInvalid: true },
+        );
+        continue;
       }
-
-      if (!validPayload.length) continue;
 
       try {
         await SheetsService.pushEntity(entity, validPayload);
@@ -188,17 +158,11 @@ export async function processSyncQueue() {
     }
   }
 
-  return { processed, failed, cleaned: duplicatedItems.length };
-}
+  if (processed > 0) {
+    await pullRemoteIntoLocal();
+  }
 
-function isRemoteNewer(localRecord, remoteRecord) {
-  const localTime = new Date(
-    localRecord?.updatedAt || localRecord?.syncUpdatedAt || 0,
-  ).getTime();
-  const remoteTime = new Date(
-    remoteRecord?.updatedAt || remoteRecord?.syncUpdatedAt || 0,
-  ).getTime();
-  return remoteTime >= localTime;
+  return { processed, failed };
 }
 
 export async function pullRemoteIntoLocal() {
@@ -206,37 +170,27 @@ export async function pullRemoteIntoLocal() {
   const remoteData = response.data || {};
   let changed = 0;
 
-  for (const storeName of REMOTE_SYNCABLE) {
-    const remoteRecords = Array.isArray(remoteData[storeName])
-      ? remoteData[storeName]
-      : [];
-    if (!remoteRecords.length) continue;
-
-    const localRecords = await getAll(storeName);
-    const merged = new Map(
-      localRecords
-        .filter(isValidStoreRecord)
-        .map((record) => [record.id, record]),
-    );
-
-    for (const remoteRecord of remoteRecords) {
-      if (!remoteRecord || !remoteRecord.id) {
-        await logSyncError(
-          storeName,
-          null,
-          `Registro remoto inválido ignorado em ${storeName}.`,
-        );
-        continue;
-      }
-
-      const localRecord = merged.get(remoteRecord.id);
-      if (!localRecord || isRemoteNewer(localRecord, remoteRecord)) {
-        merged.set(remoteRecord.id, { ...remoteRecord, syncStatus: "synced" });
-        changed += 1;
-      }
+  for (const storeName of ENTITY_STORES) {
+    if (LOCAL_ONLY_STORES.has(storeName)) {
+      await clearStore(storeName);
+      continue;
     }
 
-    await bulkPut(storeName, [...merged.values()], { skipInvalid: true });
+    const remoteRecords = Array.isArray(remoteData[storeName]) ? remoteData[storeName] : [];
+    await clearStore(storeName);
+
+    if (remoteRecords.length) {
+      await bulkPut(
+        storeName,
+        remoteRecords.map((record) => ({
+          ...record,
+          syncStatus: "synced",
+        })),
+        { skipInvalid: true },
+      );
+    }
+
+    changed += remoteRecords.length;
   }
 
   return { changed };
@@ -244,12 +198,12 @@ export async function pullRemoteIntoLocal() {
 
 export async function requeueFailedSync() {
   const queue = await getAll("syncQueue");
-  const failedItems = queue.filter((item) => item.syncStatus === "failed");
-  if (!failedItems.length) return 0;
+  const failed = queue.filter((item) => item.syncStatus === "failed");
+  if (!failed.length) return 0;
 
   await bulkPut(
     "syncQueue",
-    failedItems.map((item) => ({
+    failed.map((item) => ({
       ...item,
       syncStatus: "pending",
       updatedAt: nowIso(),
@@ -257,5 +211,5 @@ export async function requeueFailedSync() {
     { skipInvalid: true },
   );
 
-  return failedItems.length;
+  return failed.length;
 }

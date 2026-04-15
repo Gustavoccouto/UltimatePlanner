@@ -1,14 +1,6 @@
 import { bulkPut } from "./storage.js";
 import { enqueueSync } from "./sync.js";
-import { createId } from "../utils/ids.js";
-import {
-  nowIso,
-  formatDateInput,
-  addMonthsToDateInput,
-  compareDateInputs,
-  getTodayDateInput,
-  parseDateInput,
-} from "../utils/dates.js";
+import { nowIso, formatDateInput, addMonthsToDateInput, compareDateInputs, getTodayDateInput, parseDateInput } from "../utils/dates.js";
 import { getCardBillingMonth } from "../utils/calculations.js";
 
 export const PLANNING_RULE_KIND = "transaction_rule";
@@ -51,33 +43,26 @@ export function getInstallmentStatus(transaction) {
   if (transaction?.installmentStatus === INSTALLMENT_STATUS.anticipated) {
     return INSTALLMENT_STATUS.anticipated;
   }
-  if (
-    transaction?.installmentStatus === INSTALLMENT_STATUS.paid ||
-    transaction?.isPaid
-  ) {
+  if (transaction?.installmentStatus === INSTALLMENT_STATUS.paid || transaction?.isPaid) {
     return INSTALLMENT_STATUS.paid;
   }
   return INSTALLMENT_STATUS.pending;
 }
 
 export function getInstallmentStatusLabel(status) {
-  return (
-    {
-      [INSTALLMENT_STATUS.pending]: "Pendente",
-      [INSTALLMENT_STATUS.paid]: "Pago",
-      [INSTALLMENT_STATUS.anticipated]: "Antecipado",
-    }[status] || "Pendente"
-  );
+  return ({
+    [INSTALLMENT_STATUS.pending]: "Pendente",
+    [INSTALLMENT_STATUS.paid]: "Pago",
+    [INSTALLMENT_STATUS.anticipated]: "Antecipado",
+  }[status] || "Pendente");
 }
 
 export function getInstallmentStatusBadge(status) {
-  return (
-    {
-      [INSTALLMENT_STATUS.pending]: "badge-warning",
-      [INSTALLMENT_STATUS.paid]: "badge-success",
-      [INSTALLMENT_STATUS.anticipated]: "badge-muted",
-    }[status] || "badge-warning"
-  );
+  return ({
+    [INSTALLMENT_STATUS.pending]: "badge-warning",
+    [INSTALLMENT_STATUS.paid]: "badge-success",
+    [INSTALLMENT_STATUS.anticipated]: "badge-muted",
+  }[status] || "badge-warning");
 }
 
 export function buildInstallmentPlanView(plan, transactions = [], cards = []) {
@@ -87,10 +72,7 @@ export function buildInstallmentPlanView(plan, transactions = [], cards = []) {
   }, {});
 
   const installments = transactions
-    .filter(
-      (transaction) =>
-        !transaction.isDeleted && transaction.installmentPlanId === plan.id,
-    )
+    .filter((transaction) => !transaction.isDeleted && transaction.installmentPlanId === plan.id)
     .sort((a, b) => {
       const aOrder = Number(a.installmentNumber || 0);
       const bOrder = Number(b.installmentNumber || 0);
@@ -105,6 +87,7 @@ export function buildInstallmentPlanView(plan, transactions = [], cards = []) {
   const settledCount = installments.filter(
     (transaction) => transaction.computedStatus !== INSTALLMENT_STATUS.pending,
   ).length;
+
   const remainingInstallments = installments.length - settledCount;
 
   return {
@@ -113,9 +96,7 @@ export function buildInstallmentPlanView(plan, transactions = [], cards = []) {
     installments,
     settledCount,
     remainingInstallments,
-    progressPercent: installments.length
-      ? Math.round((settledCount / installments.length) * 100)
-      : 0,
+    progressPercent: installments.length ? Math.round((settledCount / installments.length) * 100) : 0,
   };
 }
 
@@ -124,29 +105,24 @@ export function describeRuleBinding(rule, accounts = [], cards = []) {
     const card = cards.find((item) => item.id === rule.cardId);
     return card ? `Cartão • ${card.name}` : "Cartão removido";
   }
-
   const account = accounts.find((item) => item.id === rule.accountId);
   return account ? `Conta • ${account.name}` : "Conta removida";
 }
 
 export function getFrequencyLabel(frequency) {
-  return (
-    {
-      monthly: "Mensal",
-      weekly: "Semanal",
-      quarterly: "Trimestral",
-      yearly: "Anual",
-    }[frequency] || "Mensal"
-  );
+  return ({
+    monthly: "Mensal",
+    weekly: "Semanal",
+    quarterly: "Trimestral",
+    yearly: "Anual",
+  }[frequency] || "Mensal");
 }
 
 export function getRuleTypeLabel(ruleType) {
-  return (
-    {
-      [RULE_TYPES.recurringIncome]: "Receita recorrente",
-      [RULE_TYPES.recurringExpense]: "Gasto recorrente",
-    }[ruleType] || "Regra recorrente"
-  );
+  return ({
+    [RULE_TYPES.recurringIncome]: "Receita recorrente",
+    [RULE_TYPES.recurringExpense]: "Gasto recorrente",
+  }[ruleType] || "Regra recorrente");
 }
 
 export function getNextOccurrenceDate(rule, transactions = []) {
@@ -154,24 +130,19 @@ export function getNextOccurrenceDate(rule, transactions = []) {
 
   const generatedKeys = new Set(
     transactions
-      .filter(
-        (transaction) =>
-          transaction.recurringRuleId === rule.id && !transaction.isDeleted,
-      )
+      .filter((transaction) => transaction.recurringRuleId === rule.id && !transaction.isDeleted)
       .map((transaction) => transaction.recurrenceKey),
   );
 
   let cursor = rule.startDate;
   let guard = 0;
+
   while (guard < MAX_RECURRING_OCCURRENCES) {
     const occurrenceDate = formatDateInput(cursor);
     if (!occurrenceDate) break;
 
     const occurrenceKey = `${rule.id}__${occurrenceDate}`;
-    if (
-      !generatedKeys.has(occurrenceKey) &&
-      isWithinRuleRange(rule, occurrenceDate)
-    ) {
+    if (!generatedKeys.has(occurrenceKey) && isWithinRuleRange(rule, occurrenceDate)) {
       return occurrenceDate;
     }
 
@@ -183,6 +154,49 @@ export function getNextOccurrenceDate(rule, transactions = []) {
   return "";
 }
 
+export function getRecurringRuleFutureCleanupUpdates(...args) {
+  let ruleId = "";
+  let transactions = [];
+  let fromDate = getTodayDateInput();
+
+  if (args.length === 1 && args[0] && typeof args[0] === "object" && !Array.isArray(args[0])) {
+    const input = args[0];
+    ruleId = input.ruleId || input.recurringRuleId || input.rule?.id || input.id || "";
+    transactions = Array.isArray(input.transactions) ? input.transactions : [];
+    fromDate = input.fromDate || input.cutoffDate || fromDate;
+  } else {
+    const [firstArg, secondArg, thirdArg] = args;
+    if (typeof firstArg === "string") {
+      ruleId = firstArg;
+    } else if (firstArg && typeof firstArg === "object") {
+      ruleId = firstArg.id || firstArg.ruleId || firstArg.recurringRuleId || "";
+    }
+    transactions = Array.isArray(secondArg) ? secondArg : [];
+    fromDate = thirdArg || fromDate;
+  }
+
+  if (!ruleId || !Array.isArray(transactions) || !transactions.length) {
+    return [];
+  }
+
+  const timestamp = nowIso();
+
+  return transactions
+    .filter((transaction) => {
+      if (!transaction || transaction.isDeleted) return false;
+      if (transaction.recurringRuleId !== ruleId) return false;
+      if (!transaction.date) return false;
+      return compareDateInputs(transaction.date, fromDate) >= 0;
+    })
+    .map((transaction) => ({
+      ...transaction,
+      isDeleted: true,
+      updatedAt: timestamp,
+      version: Number(transaction.version || 0) + 1,
+      syncStatus: "pending",
+    }));
+}
+
 export async function materializePlanningEntries({
   preferences = [],
   installmentPlans = [],
@@ -191,18 +205,23 @@ export async function materializePlanningEntries({
 } = {}) {
   const recurringRules = getRecurringRules(preferences);
   const duplicateTransactionUpdates = getDuplicatePlanningTransactionUpdates(transactions);
+  const orphanRecurringFutureCleanupUpdates = getOrphanRecurringFutureCleanupUpdates(
+    transactions,
+    recurringRules,
+  );
+
   const duplicateIds = new Set(duplicateTransactionUpdates.map((item) => item.id));
+  const orphanCleanupIds = new Set(orphanRecurringFutureCleanupUpdates.map((item) => item.id));
+
   const effectiveTransactions = transactions.map((transaction) =>
-    duplicateIds.has(transaction.id)
+    duplicateIds.has(transaction.id) || orphanCleanupIds.has(transaction.id)
       ? { ...transaction, isDeleted: true }
       : transaction,
   );
 
   const existingRecurrenceKeys = new Set(
     effectiveTransactions
-      .filter(
-        (transaction) => !transaction.isDeleted && transaction.recurrenceKey,
-      )
+      .filter((transaction) => !transaction.isDeleted && transaction.recurrenceKey)
       .map((transaction) => transaction.recurrenceKey),
   );
 
@@ -211,23 +230,20 @@ export async function materializePlanningEntries({
     return acc;
   }, {});
 
-  const horizonEnd = addMonthsToDateInput(
-    getTodayDateInput(),
-    PLANNING_HORIZON_MONTHS,
-  );
+  const horizonEnd = addMonthsToDateInput(getTodayDateInput(), PLANNING_HORIZON_MONTHS);
   const timestamp = nowIso();
   const generatedTransactions = [];
 
   for (const rule of recurringRules) {
     const occurrences = buildOccurrences(rule, horizonEnd);
+
     for (const occurrenceDate of occurrences) {
       const recurrenceKey = `${rule.id}__${occurrenceDate}`;
       if (existingRecurrenceKeys.has(recurrenceKey)) continue;
 
       const card = cardsById[rule.cardId];
       const isCardExpense =
-        rule.ruleType === RULE_TYPES.recurringExpense &&
-        rule.targetType === "card";
+        rule.ruleType === RULE_TYPES.recurringExpense && rule.targetType === "card";
 
       generatedTransactions.push({
         id: buildRecurringTransactionId(rule.id, occurrenceDate),
@@ -258,66 +274,62 @@ export async function materializePlanningEntries({
         syncStatus: "pending",
         isDeleted: false,
       });
+
       existingRecurrenceKeys.add(recurrenceKey);
     }
   }
 
   const planUpdates = getAllPlanRemainingUpdates(installmentPlans, effectiveTransactions);
+  const transactionUpdates = [
+    ...duplicateTransactionUpdates,
+    ...orphanRecurringFutureCleanupUpdates,
+  ];
 
-  if (
-    !generatedTransactions.length &&
-    !planUpdates.length &&
-    !duplicateTransactionUpdates.length
-  ) {
-    return { created: 0, updatedPlans: 0, deduped: 0 };
+  if (!generatedTransactions.length && !planUpdates.length && !transactionUpdates.length) {
+    return { created: 0, updatedPlans: 0, deduped: 0, cleanedRecurringFuture: 0 };
   }
 
-  if (duplicateTransactionUpdates.length) {
-    await bulkPut("transactions", duplicateTransactionUpdates, { skipInvalid: true });
+  if (transactionUpdates.length) {
+    await bulkPut("transactions", transactionUpdates, { skipInvalid: true });
     await Promise.all(
-      duplicateTransactionUpdates.map((transaction) =>
-        enqueueSync("transactions", transaction.id),
-      ),
+      transactionUpdates.map((transaction) => enqueueSync("transactions", transaction.id)),
     );
   }
 
   if (generatedTransactions.length) {
     await bulkPut("transactions", generatedTransactions, { skipInvalid: true });
     await Promise.all(
-      generatedTransactions.map((transaction) =>
-        enqueueSync("transactions", transaction.id),
-      ),
+      generatedTransactions.map((transaction) => enqueueSync("transactions", transaction.id)),
     );
   }
 
   if (planUpdates.length) {
     await bulkPut("installmentPlans", planUpdates, { skipInvalid: true });
-    await Promise.all(
-      planUpdates.map((plan) => enqueueSync("installmentPlans", plan.id)),
-    );
+    await Promise.all(planUpdates.map((plan) => enqueueSync("installmentPlans", plan.id)));
   }
 
   return {
     created: generatedTransactions.length,
     updatedPlans: planUpdates.length,
     deduped: duplicateTransactionUpdates.length,
+    cleanedRecurringFuture: orphanRecurringFutureCleanupUpdates.length,
   };
 }
 
 export function getAllPlanRemainingUpdates(plans = [], transactions = []) {
   const timestamp = nowIso();
+
   return plans
     .filter((plan) => !plan.isDeleted)
     .map((plan) => {
       const relatedTransactions = transactions.filter(
-        (transaction) =>
-          !transaction.isDeleted && transaction.installmentPlanId === plan.id,
+        (transaction) => !transaction.isDeleted && transaction.installmentPlanId === plan.id,
       );
+
       if (!relatedTransactions.length) return null;
 
       const remainingInstallments = relatedTransactions.filter(
-        (transaction) =>
-          getInstallmentStatus(transaction) === INSTALLMENT_STATUS.pending,
+        (transaction) => getInstallmentStatus(transaction) === INSTALLMENT_STATUS.pending,
       ).length;
 
       if (remainingInstallments === Number(plan.remainingInstallments || 0)) {
@@ -430,6 +442,7 @@ function getDuplicatePlanningTransactionUpdates(transactions = []) {
       });
 
       const keeper = sorted[0]?.id;
+
       sorted.slice(1).forEach((transaction) => {
         if (transaction.id === keeper) return;
         duplicateUpdates.push({
@@ -449,4 +462,29 @@ function getDuplicatePlanningTransactionUpdates(transactions = []) {
   });
 
   return [...uniqueById.values()];
+}
+
+function getOrphanRecurringFutureCleanupUpdates(
+  transactions = [],
+  recurringRules = [],
+  fromDate = getTodayDateInput(),
+) {
+  const activeRuleIds = new Set(recurringRules.map((rule) => rule.id));
+  const timestamp = nowIso();
+
+  return transactions
+    .filter((transaction) => {
+      if (!transaction || transaction.isDeleted) return false;
+      if (!transaction.recurringRuleId) return false;
+      if (activeRuleIds.has(transaction.recurringRuleId)) return false;
+      if (!transaction.date) return false;
+      return compareDateInputs(transaction.date, fromDate) >= 0;
+    })
+    .map((transaction) => ({
+      ...transaction,
+      isDeleted: true,
+      updatedAt: timestamp,
+      version: Number(transaction.version || 0) + 1,
+      syncStatus: "pending",
+    }));
 }
