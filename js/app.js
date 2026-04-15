@@ -50,6 +50,7 @@ import {
 import { APP_CONFIG } from "./config.js";
 
 const viewRoot = document.getElementById("view-root");
+
 const routeMap = {
   dashboard: renderDashboard,
   accounts: renderAccounts,
@@ -65,6 +66,7 @@ const routeMap = {
 };
 
 const REMOTE_PULL_INTERVAL_MS = Math.max(APP_CONFIG.syncIntervalMs * 2, 30000);
+const MAX_SYNC_DRAIN_PASSES = 4;
 
 let syncLoopHandle = null;
 let syncInFlight = false;
@@ -79,12 +81,14 @@ function renderApp() {
 
   const renderer = routeMap[state.route] || renderDashboard;
   viewRoot.innerHTML = state.ui.loading ? loadingView() : renderer();
+
   bindViewEvents();
 
   if (!state.ui.loading) {
     if (state.route === "dashboard") {
       requestAnimationFrame(() => mountDashboardCharts());
     }
+
     if (state.route === "reports") {
       requestAnimationFrame(() => mountReportCharts());
     }
@@ -108,6 +112,7 @@ function bindViewEvents() {
     (event) => {
       const value = event.target.value;
       patchUi({ query: value });
+
       if (value.trim() && state.route !== "search") {
         navigate("search");
       }
@@ -120,6 +125,7 @@ function bindViewEvents() {
       if (event.key === "Escape") {
         event.target.value = "";
         patchUi({ query: "" });
+
         if (state.route === "search") navigate("dashboard");
       }
     },
@@ -128,6 +134,7 @@ function bindViewEvents() {
   document
     .getElementById("mobile-menu-btn")
     ?.addEventListener("click", openMobileDrawer);
+
   document
     .querySelectorAll("#open-onboarding-btn, #open-mobile-onboarding-btn")
     .forEach((button) => {
@@ -144,6 +151,7 @@ function bindViewEvents() {
         const nextMonth = event.target.value;
         if (!nextMonth) return;
         setSelectedMonth(nextMonth);
+
         if (event.target.id === "mobile-month-picker") {
           closeMobileDrawer();
         }
@@ -156,9 +164,10 @@ function loadingView() {
     ${Array.from({ length: 8 })
       .map(
         () => `
-          <div class="card p-4">
-            <div class="skeleton h-5 w-32 mb-4"></div>
-            <div class="skeleton h-10 w-full"></div>
+          <div class="card p-6 animate-pulse">
+            <div class="h-6 w-40 rounded-full bg-slate-200 mb-3"></div>
+            <div class="h-4 w-full rounded-full bg-slate-100 mb-2"></div>
+            <div class="h-4 w-5/6 rounded-full bg-slate-100"></div>
           </div>`,
       )
       .join("")}
@@ -190,6 +199,7 @@ function setupConnectivity() {
   window.addEventListener("online", () =>
     patchUi({ offline: false, integrationLabel: "Conexão restaurada" }),
   );
+
   window.addEventListener("offline", () =>
     patchUi({ offline: true, integrationLabel: "Modo offline" }),
   );
@@ -213,10 +223,12 @@ function setupExternalStateWatchers() {
 
 function scheduleExternalReload(label) {
   window.clearTimeout(externalReloadTimer);
+
   externalReloadTimer = window.setTimeout(async () => {
     if (externalReloadInFlight || state.ui.loading) return;
 
     externalReloadInFlight = true;
+
     try {
       await loadState();
       patchUi({ integrationLabel: label });
@@ -239,10 +251,12 @@ async function initIntegration() {
       integrationStatus: "testing",
       integrationLabel: "Preparando estrutura remota…",
     });
+
     await SheetsService.init();
     const result = await pullRemoteIntoLocal();
     lastRemotePullAt = Date.now();
     await loadState();
+
     patchUi({
       integrationStatus: "online",
       integrationLabel: result.changed
@@ -269,12 +283,14 @@ async function maybePullRemoteUpdates(force = false) {
   }
 
   const now = Date.now();
+
   if (!force && now - lastRemotePullAt < REMOTE_PULL_INTERVAL_MS) {
     return { changed: 0 };
   }
 
   lastRemotePullAt = now;
   const result = await pullRemoteIntoLocal();
+
   if (result.changed) {
     await loadState();
     patchUi({
@@ -282,7 +298,29 @@ async function maybePullRemoteUpdates(force = false) {
       integrationLabel: `${result.changed} item(ns) recebidos da nuvem`,
     });
   }
+
   return result;
+}
+
+async function drainPendingSync() {
+  const aggregate = { processed: 0, failed: 0, cleaned: 0 };
+
+  for (let pass = 0; pass < MAX_SYNC_DRAIN_PASSES; pass += 1) {
+    const pending = await hasPendingSync();
+    if (!pending) break;
+
+    const passResult = await processSyncQueue();
+
+    aggregate.processed += passResult.processed || 0;
+    aggregate.failed += passResult.failed || 0;
+    aggregate.cleaned += passResult.cleaned || 0;
+
+    if (!passResult.processed && !passResult.failed && !passResult.cleaned) {
+      break;
+    }
+  }
+
+  return aggregate;
 }
 
 async function runSyncLoop() {
@@ -307,7 +345,7 @@ async function runSyncLoop() {
     }
 
     patchUi({ syncing: true, integrationLabel: "Sincronizando alterações…" });
-    result = await processSyncQueue();
+    result = await drainPendingSync();
 
     if (result.processed) {
       patchUi({
