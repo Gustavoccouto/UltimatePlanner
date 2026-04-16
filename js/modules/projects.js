@@ -12,6 +12,7 @@ import { putOne, getOne, getAll } from "../services/storage.js";
 import { enqueueSync } from "../services/sync.js";
 import { currency, percent, datePt } from "../utils/formatters.js";
 import { getCurrentUser } from "./onboarding.js";
+import { SheetsService } from "../services/sheets.js";
 
 const PROJECT_TABS = ["checklist", "analytics", "financas"];
 const STATUS_FILTERS = ["tudo", "pendentes", "concluidos"];
@@ -118,6 +119,196 @@ function projectThemeStyle(theme) {
   return `style="--project-theme-image:url('${theme.coverUrl}');--project-accent-rgb:${theme.accent};--project-accent-rgb-alt:${theme.accentAlt};"`;
 }
 
+
+
+function getCurrentActorMeta() {
+  const user = getCurrentUser();
+  return {
+    actorUserId: user?.id || null,
+    actorUserName: user?.name || "Usuário",
+    actorLogin: user?.login || "",
+    actorWorkspaceKey: user?.workspaceKey || "",
+  };
+}
+
+function getProjectWorkspaceKey(project = {}) {
+  const currentUser = getCurrentUser();
+  return (
+    project.workspaceKey ||
+    project.ownerWorkspaceKey ||
+    currentUser?.workspaceKey ||
+    null
+  );
+}
+
+function normalizeSharedUsers(sharedUsers = [], ownerUserId = "") {
+  const seen = new Set();
+  return (Array.isArray(sharedUsers) ? sharedUsers : [])
+    .map((user) => ({
+      id: String(user?.id || user?.userId || "").trim(),
+      name: String(user?.name || user?.userName || "").trim(),
+      login: String(user?.login || "").trim(),
+      workspaceKey: String(user?.workspaceKey || "").trim(),
+    }))
+    .filter((user) => user.id && user.id !== String(ownerUserId || ""))
+    .filter((user) => {
+      if (seen.has(user.id)) return false;
+      seen.add(user.id);
+      return true;
+    });
+}
+
+function getProjectSharedUsers(project = {}) {
+  return normalizeSharedUsers(project.sharedUsers || [], project.ownerUserId);
+}
+
+function getProjectOwnerLabel(project = {}) {
+  if (project.ownerUserName) return project.ownerUserName;
+  if (project.ownerLogin) return `@${project.ownerLogin}`;
+  return project.ownerUserId ? 'Dono do projeto' : 'Sem dono';
+}
+
+function isProjectOwner(project = {}) {
+  const currentUser = getCurrentUser();
+  if (!currentUser) return false;
+  if (project.ownerUserId) return project.ownerUserId === currentUser.id;
+  return getProjectWorkspaceKey(project) === currentUser.workspaceKey;
+}
+
+function canEditProject(project = {}) {
+  const currentUser = getCurrentUser();
+  if (!currentUser) return false;
+  if (isProjectOwner(project)) return true;
+  return getProjectSharedUsers(project).some((user) => user.id === currentUser.id);
+}
+
+function canManageProjectSharing(project = {}) {
+  return isProjectOwner(project);
+}
+
+function getProjectActivity(projectId) {
+  return state.data.auditLogs
+    .filter(
+      (item) =>
+        !item.isDeleted &&
+        item.entityType === 'project' &&
+        item.entityId === projectId,
+    )
+    .sort((a, b) => new Date(b.timestamp || b.updatedAt || 0) - new Date(a.timestamp || a.updatedAt || 0));
+}
+
+function formatActivityValue(value) {
+  if (value === null || typeof value === 'undefined' || value === '') return '—';
+  if (typeof value === 'number') return currency(value);
+  if (typeof value === 'boolean') return value ? 'Sim' : 'Não';
+  return String(value);
+}
+
+function buildProjectActivityLabel(log) {
+  const actor = log.actorUserName || 'Alguém';
+  const fieldLabel = log.fieldLabel || log.field || 'campo';
+
+  switch (log.actionType) {
+    case 'project_created':
+      return `${actor} criou o projeto.`;
+    case 'project_deleted':
+      return `${actor} excluiu o projeto.`;
+    case 'project_share_added':
+      return `${actor} compartilhou com ${log.relatedUserName || log.newValue || 'um usuário'}.`;
+    case 'project_share_removed':
+      return `${actor} removeu ${log.relatedUserName || log.previousValue || 'um usuário'} do compartilhamento.`;
+    case 'project_contribution_added':
+      return `${actor} adicionou ${currency(Number(log.newValue || log.amount || 0))} ao caixa do projeto.`;
+    case 'project_item_created':
+      return `${actor} criou o item ${log.relatedItemName || log.newValue || ''}.`.trim();
+    case 'project_item_deleted':
+      return `${actor} excluiu o item ${log.relatedItemName || log.previousValue || ''}.`.trim();
+    case 'project_item_toggled':
+      return `${actor} marcou ${log.relatedItemName || 'um item'} como ${String(log.newValue) === 'true' || log.newValue === true ? 'concluído' : 'pendente'}.`;
+    case 'project_participant_added':
+      return `${actor} adicionou ${log.relatedUserName || log.newValue || 'um participante'} na área financeira.`;
+    case 'project_updated':
+    case 'project_item_updated':
+      return `${actor} alterou ${fieldLabel} de ${formatActivityValue(log.previousValue)} para ${formatActivityValue(log.newValue)}.`;
+    default:
+      return `${actor} registrou uma atividade no projeto.`;
+  }
+}
+
+function renderProjectActivityPreview(projectId, emptyText = 'Nenhuma atividade registrada ainda.') {
+  const items = getProjectActivity(projectId).slice(0, 5);
+  if (!items.length) {
+    return `<div class="text-sm text-slate-500">${emptyText}</div>`;
+  }
+  return `
+    <div class="space-y-3">
+      ${items
+        .map(
+          (item) => `
+            <div class="surface-soft rounded-[22px] p-4 border border-slate-100">
+              <div class="font-semibold text-slate-900">${buildProjectActivityLabel(item)}</div>
+              <div class="text-xs text-slate-500 mt-1">${datePt((item.timestamp || item.updatedAt || '').slice(0, 10))} • ${item.actorUserName || 'Usuário'}</div>
+            </div>`,
+        )
+        .join('')}
+    </div>`;
+}
+
+function matchesShareUser(user, query = '') {
+  const term = String(query || '').trim().toLowerCase();
+  if (!term) return true;
+  const haystack = [user.name, user.login, user.workspaceKey, user.id]
+    .map((value) => String(value || '').toLowerCase())
+    .join(' ');
+  return haystack.includes(term);
+}
+
+async function createProjectAuditLog(project, actionType, details = {}) {
+  const actor = getCurrentActorMeta();
+  const timestamp = nowIso();
+  const record = {
+    id: createId('audit'),
+    entityType: 'project',
+    entityId: project.id,
+    projectId: project.id,
+    projectName: project.name,
+    actionType,
+    field: details.field || '',
+    fieldLabel: details.fieldLabel || '',
+    previousValue: typeof details.previousValue === 'undefined' ? null : details.previousValue,
+    newValue: typeof details.newValue === 'undefined' ? null : details.newValue,
+    relatedUserId: details.relatedUserId || null,
+    relatedUserName: details.relatedUserName || '',
+    relatedItemId: details.relatedItemId || null,
+    relatedItemName: details.relatedItemName || '',
+    amount: typeof details.amount === 'undefined' ? null : Number(details.amount || 0),
+    notes: details.notes || '',
+    timestamp,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    syncStatus: 'pending',
+    isDeleted: false,
+    version: 1,
+    workspaceKey: getProjectWorkspaceKey(project),
+    ...actor,
+  };
+
+  await putOne('auditLogs', record);
+  await enqueueSync('auditLogs', record.id);
+  return record;
+}
+
+async function logProjectFieldChanges(project, previous = {}, next = {}, fieldMap = {}) {
+  for (const [field, label] of Object.entries(fieldMap)) {
+    if ((previous?.[field] || '') === (next?.[field] || '')) continue;
+    await createProjectAuditLog(project, 'project_updated', {
+      field,
+      fieldLabel: label,
+      previousValue: previous?.[field] ?? null,
+      newValue: next?.[field] ?? null,
+    });
+  }
+}
 function getProjects() {
   return state.data.projects.filter((item) => !item.isDeleted);
 }
@@ -239,6 +430,7 @@ function getVisibleProjectItems(projectId) {
 function projectGridCard(project) {
   const summary = getProjectSummary(project.id);
   const theme = resolveProjectTheme(project);
+  const sharedUsers = getProjectSharedUsers(project);
   return `
     <button
       type="button"
@@ -259,6 +451,7 @@ function projectGridCard(project) {
             <div class="eyebrow">Projeto</div>
             <div class="project-summary-title">${project.name}</div>
             <div class="project-summary-subtitle">${project.notes || project.desc || "Planejamento organizado por itens."}</div>
+            <div class="text-xs text-slate-500 mt-3">Dono: ${getProjectOwnerLabel(project)}${sharedUsers.length ? ` • Compartilhado com ${sharedUsers.length}` : ""}</div>
           </div>
           <i class="fa-solid fa-arrow-up-right-from-square text-slate-300"></i>
         </div>
@@ -275,7 +468,7 @@ function projectGridCard(project) {
 function renderProjectList() {
   const projects = getProjects();
   return `
-    ${pageHeader("Projetos", "Projetos agora são separados de metas: aqui você monta itens planejados, soma o custo total e acompanha os aportes no caixa do projeto.", '<button id="new-project-btn" class="action-btn action-btn-primary"><i class="fa-solid fa-plus mr-2"></i>Novo projeto</button>')}
+    ${pageHeader("Projetos", "Projetos agora são separados de metas: aqui você monta itens planejados, soma o custo total e acompanha os aportes no caixa do projeto.")}
 
     <section class="card p-5 mb-6 card-glass project-create-card">
       <form id="project-form" class="grid lg:grid-cols-[1.1fr_1fr_.55fr_.8fr_auto] gap-3 items-end">
@@ -313,6 +506,9 @@ function renderProjectList() {
 
 function renderProjectHeader(project, summary) {
   const theme = resolveProjectTheme(project);
+  const sharedUsers = getProjectSharedUsers(project);
+  const canManageShare = canManageProjectSharing(project);
+  const canEdit = canEditProject(project);
   return `
     <section class="project-detail-shell">
       <article class="card project-hero-card" ${projectThemeStyle(theme)}>
@@ -322,6 +518,8 @@ function renderProjectHeader(project, summary) {
             <div class="project-hero-chip-row">
               <span class="project-summary-theme-pill">${theme.label}</span>
               <span class="project-summary-theme-pill project-summary-theme-pill-soft">${project.icon || "✨"}</span>
+              <span class="project-summary-theme-pill project-summary-theme-pill-soft">Dono: ${getProjectOwnerLabel(project)}</span>
+              ${sharedUsers.length ? `<span class="project-summary-theme-pill project-summary-theme-pill-soft">Compartilhado com ${sharedUsers.length}</span>` : ""}
             </div>
           </div>
 
@@ -331,8 +529,10 @@ function renderProjectHeader(project, summary) {
               <p class="page-subtitle project-hero-subtitle">${project.notes || project.desc || "Projeto personalizado no UltimatePlanner."}</p>
             </div>
             <div class="project-detail-actions">
-              <button id="edit-project-btn" class="action-btn"><i class="fa-solid fa-pen mr-2"></i>Editar</button>
-              <button id="delete-project-btn" class="action-btn action-btn-danger-soft"><i class="fa-solid fa-trash mr-2"></i>Excluir</button>
+              ${canEdit ? `<button id="edit-project-btn" class="action-btn"><i class="fa-solid fa-pen mr-2"></i>Editar</button>` : ""}
+              <button id="project-history-btn" class="action-btn"><i class="fa-solid fa-clock-rotate-left mr-2"></i>Atividade</button>
+              ${canManageShare ? `<button id="project-share-btn" class="action-btn"><i class="fa-solid fa-users mr-2"></i>Compartilhar</button>` : ""}
+              ${canManageShare ? `<button id="delete-project-btn" class="action-btn action-btn-danger-soft"><i class="fa-solid fa-trash mr-2"></i>Excluir</button>` : ""}
               <button id="new-project-btn" class="action-btn action-btn-primary"><i class="fa-solid fa-plus mr-2"></i>Novo projeto</button>
             </div>
           </div>
@@ -454,31 +654,57 @@ function renderAnalyticsTab(project, summary) {
 function renderFinanceTab(project, summary) {
   const participants = getProjectParticipants(project.id);
   const options = getContributorOptions(project.id);
+  const sharedUsers = getProjectSharedUsers(project);
+  const canManageShare = canManageProjectSharing(project);
   return `
     <section class="project-section-head">
       <div>
         <div class="section-title project-section-title">Finanças do projeto</div>
       </div>
-      <button id="add-project-contribution-btn" class="action-btn action-btn-primary">+ Aporte</button>
+      <div class="flex items-center gap-2 flex-wrap justify-end">
+        <button id="project-history-btn" class="action-btn">Atividade</button>
+        ${canManageShare ? `<button id="project-share-btn" class="action-btn">Compartilhar</button>` : ""}
+        <button id="add-project-contribution-btn" class="action-btn action-btn-primary">+ Aporte</button>
+      </div>
     </section>
 
     <section class="project-finance-grid">
       <article class="card p-5">
-        <div class="flex items-center justify-between gap-3 mb-4"><div><div class="section-title !text-[1.1rem]">Participantes</div><div class="text-sm text-slate-500">Quem pode aportar nesse projeto</div></div></div>
-        <form id="project-participant-form" data-project-id="${project.id}" class="flex gap-2 mb-4">
-          <input name="name" class="field" placeholder="Nome da pessoa" />
-          <button class="action-btn">Adicionar</button>
-        </form>
+        <div class="flex items-center justify-between gap-3 mb-4"><div><div class="section-title !text-[1.1rem]">Participantes financeiros</div><div class="text-sm text-slate-500">Quem pode aparecer como responsável nos aportes desse projeto</div></div></div>
+        ${canManageShare ? `
+          <form id="project-participant-form" data-project-id="${project.id}" class="flex gap-2 mb-4">
+            <input name="name" class="field" placeholder="Nome da pessoa" />
+            <button class="action-btn">Adicionar</button>
+          </form>` : `<div class="text-sm text-slate-500 mb-4">Somente o dono pode gerenciar os participantes financeiros manuais.</div>`}
         <div class="flex flex-wrap gap-2">
           ${options.length ? options.map((person) => `<div class="project-person-pill"><span>${person.label}</span></div>`).join("") : `<div class="text-slate-500">Nenhum participante.</div>`}
         </div>
       </article>
 
       <article class="card p-5">
+        <div class="flex items-center justify-between gap-3 mb-4">
+          <div>
+            <div class="section-title !text-[1.1rem]">Compartilhamento</div>
+            <div class="text-sm text-slate-500">Dono e usuários do app com acesso a este projeto</div>
+          </div>
+          ${canManageShare ? `<button id="project-share-btn-secondary" class="action-btn">Gerenciar</button>` : ""}
+        </div>
+        <div class="space-y-3">
+          <div class="surface-soft rounded-[22px] p-4 border border-slate-100">
+            <div class="text-xs text-slate-500 uppercase tracking-[0.14em]">Dono</div>
+            <div class="font-semibold text-slate-900 mt-1">${getProjectOwnerLabel(project)}</div>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            ${sharedUsers.length ? sharedUsers.map((user) => `<div class="project-person-pill"><span>${user.name || `@${user.login}`}</span></div>`).join("") : `<div class="text-slate-500">Projeto individual, sem compartilhamento.</div>`}
+          </div>
+        </div>
+      </article>
+
+      <article class="card p-5 md:col-span-2">
         <div class="section-title !text-[1.1rem]">Histórico de aportes</div>
         <div class="overflow-auto mt-4">
           <table class="data-table">
-            <thead><tr><th>Quem guardou</th><th>Descrição</th><th>Data</th><th>Valor</th></tr></thead>
+            <thead><tr><th>Quem guardou</th><th>Registrado por</th><th>Descrição</th><th>Data</th><th>Valor</th></tr></thead>
             <tbody>
               ${
                 summary.contributions.length
@@ -486,14 +712,22 @@ function renderFinanceTab(project, summary) {
                       .sort((a, b) => new Date(b.date) - new Date(a.date))
                       .map(
                         (item) =>
-                          `<tr><td>${item.contributorName || "Sem nome"}</td><td>${item.label || "Aporte"}</td><td>${datePt(item.date)}</td><td>${currency(item.amount || 0)}</td></tr>`,
+                          `<tr><td>${item.contributorName || "Sem nome"}</td><td>${item.actorUserName || item.createdByUserName || "—"}</td><td>${item.label || "Aporte"}</td><td>${datePt(item.date)}</td><td>${currency(item.amount || 0)}</td></tr>`,
                       )
                       .join("")
-                  : `<tr><td colspan="4" class="text-slate-500">Nenhum aporte lançado ainda.</td></tr>`
+                  : `<tr><td colspan="5" class="text-slate-500">Nenhum aporte lançado ainda.</td></tr>`
               }
             </tbody>
           </table>
         </div>
+      </article>
+
+      <article class="card p-5 md:col-span-2">
+        <div class="flex items-center justify-between gap-3 mb-4">
+          <div class="section-title !text-[1.1rem]">Atividade recente</div>
+          <button id="project-history-btn-secondary" class="action-btn">Ver tudo</button>
+        </div>
+        ${renderProjectActivityPreview(project.id, 'Nenhuma atividade registrada neste projeto.')}
       </article>
     </section>`;
 }
@@ -648,218 +882,446 @@ function openContributionModal(projectId) {
     ?.addEventListener("submit", saveProjectContribution);
 }
 
+
+let projectShareModalState = null;
+
+function buildProjectShareRows(project, users, search = "") {
+  const sharedIds = new Set(getProjectSharedUsers(project).map((user) => user.id));
+  const filtered = users.filter((user) => matchesShareUser(user, search));
+
+  if (!filtered.length) {
+    return `<div class="text-sm text-slate-500 p-4 text-center">Nenhum usuário encontrado para esse filtro.</div>`;
+  }
+
+  return filtered
+    .map((user) => {
+      const isShared = sharedIds.has(user.id);
+      return `
+        <div class="flex items-center justify-between gap-3 rounded-[22px] border border-slate-200 bg-white px-4 py-3">
+          <div class="min-w-0">
+            <div class="font-semibold text-slate-900 truncate">${user.name || user.login || user.id}</div>
+            <div class="text-sm text-slate-500 truncate">@${user.login || "sem-login"} • ${user.workspaceKey || "sem-workspace"}</div>
+          </div>
+          <button type="button" class="action-btn ${isShared ? "action-btn-danger-soft" : "action-btn-primary"}" data-project-share-toggle="${user.id}">${isShared ? "Remover" : "Adicionar"}</button>
+        </div>`;
+    })
+    .join("");
+}
+
+async function renderProjectShareModal(projectId) {
+  const project = await getOne('projects', projectId);
+  if (!project) return;
+  const users = projectShareModalState?.users || [];
+  const search = projectShareModalState?.search || '';
+  openModal(`
+    <div class="flex items-center justify-between mb-6 gap-4">
+      <div>
+        <div class="text-2xl font-bold">Compartilhar projeto</div>
+        <div class="text-sm text-slate-500 mt-1">Somente o dono pode adicionar ou remover usuários do app nesse projeto.</div>
+      </div>
+      <button id="close-modal" class="action-btn">Fechar</button>
+    </div>
+    <div class="surface-soft rounded-[24px] p-4 mb-4 border border-slate-100">
+      <div class="text-xs uppercase tracking-[0.14em] text-slate-400">Dono</div>
+      <div class="font-semibold text-slate-900 mt-1">${getProjectOwnerLabel(project)}</div>
+    </div>
+    <label class="block mb-4">
+      <span class="text-sm font-semibold block mb-2">Buscar usuário</span>
+      <input id="project-share-search" class="field" value="${search}" placeholder="Buscar por nome, login ou workspace" />
+    </label>
+    <div class="space-y-3 max-h-[50vh] overflow-auto" id="project-share-list">${buildProjectShareRows(project, users, search)}</div>
+  `);
+
+  document.getElementById('close-modal')?.addEventListener('click', closeModal);
+  document.getElementById('project-share-search')?.addEventListener('input', (event) => {
+    projectShareModalState = { ...(projectShareModalState || {}), search: event.target.value || '' };
+    renderProjectShareModal(projectId);
+  });
+  document.querySelectorAll('[data-project-share-toggle]').forEach((button) => {
+    button.addEventListener('click', () => toggleProjectSharedUser(projectId, button.dataset.projectShareToggle));
+  });
+}
+
+async function openProjectShareModal(projectId) {
+  const project = await getOne('projects', projectId);
+  if (!project) return;
+  if (!canManageProjectSharing(project)) {
+    toast('Somente o dono pode gerenciar o compartilhamento.', 'error');
+    return;
+  }
+
+  try {
+    const result = await SheetsService.listUsers();
+    const users = (Array.isArray(result?.users) ? result.users : [])
+      .filter((user) => user.id !== project.ownerUserId)
+      .map((user) => ({
+        id: user.id,
+        name: user.name,
+        login: user.login,
+        workspaceKey: user.workspaceKey,
+      }));
+
+    projectShareModalState = { projectId, users, search: '' };
+    await renderProjectShareModal(projectId);
+  } catch (error) {
+    toast(error.message || 'Não foi possível carregar os usuários.', 'error');
+  }
+}
+
+async function toggleProjectSharedUser(projectId, userId) {
+  const project = await getOne('projects', projectId);
+  if (!project) return;
+  if (!canManageProjectSharing(project)) {
+    toast('Somente o dono pode gerenciar o compartilhamento.', 'error');
+    return;
+  }
+
+  const users = projectShareModalState?.users || [];
+  const targetUser = users.find((user) => user.id === userId);
+  if (!targetUser) return;
+
+  const sharedUsers = getProjectSharedUsers(project);
+  const exists = sharedUsers.some((user) => user.id === userId);
+  const nextSharedUsers = exists
+    ? sharedUsers.filter((user) => user.id !== userId)
+    : normalizeSharedUsers([...sharedUsers, targetUser], project.ownerUserId);
+
+  const updated = {
+    ...project,
+    ownerUserId: project.ownerUserId || getCurrentUser()?.id || null,
+    ownerUserName: project.ownerUserName || getCurrentUser()?.name || '',
+    ownerLogin: project.ownerLogin || getCurrentUser()?.login || '',
+    ownerWorkspaceKey: project.ownerWorkspaceKey || getCurrentUser()?.workspaceKey || getProjectWorkspaceKey(project),
+    sharedUsers: nextSharedUsers,
+    sharedUserIds: nextSharedUsers.map((user) => user.id),
+    updatedAt: nowIso(),
+    version: (project.version || 0) + 1,
+    syncStatus: 'pending',
+  };
+
+  await putOne('projects', updated);
+  await enqueueSync('projects', updated.id);
+  await createProjectAuditLog(updated, exists ? 'project_share_removed' : 'project_share_added', {
+    relatedUserId: targetUser.id,
+    relatedUserName: targetUser.name || `@${targetUser.login}`,
+    previousValue: exists ? targetUser.name || targetUser.login : null,
+    newValue: exists ? null : targetUser.name || targetUser.login,
+  });
+  await loadState();
+  await renderProjectShareModal(projectId);
+  toast(exists ? 'Usuário removido do compartilhamento.' : 'Usuário adicionado ao compartilhamento.', 'success');
+}
+
+function renderProjectHistoryRows(projectId) {
+  const logs = getProjectActivity(projectId);
+  if (!logs.length) {
+    return `<div class="text-sm text-slate-500">Nenhuma atividade registrada ainda.</div>`;
+  }
+
+  return `
+    <div class="space-y-3 max-h-[55vh] overflow-auto">
+      ${logs
+        .map(
+          (log) => `
+            <article class="surface-soft rounded-[22px] p-4 border border-slate-100">
+              <div class="font-semibold text-slate-900">${buildProjectActivityLabel(log)}</div>
+              <div class="text-sm text-slate-500 mt-2">${log.fieldLabel || log.field || 'Atividade'} • ${log.actorUserName || 'Usuário'} • ${datePt((log.timestamp || log.updatedAt || '').slice(0, 10))}</div>
+            </article>`,
+        )
+        .join('')}
+    </div>`;
+}
+
+async function openProjectHistoryModal(projectId) {
+  const project = await getOne('projects', projectId);
+  if (!project) return;
+  openModal(`
+    <div class="flex items-center justify-between mb-6 gap-4">
+      <div>
+        <div class="text-2xl font-bold">Atividade do projeto</div>
+        <div class="text-sm text-slate-500 mt-1">Histórico simples e persistido das ações realizadas nesse projeto.</div>
+      </div>
+      <button id="close-modal" class="action-btn">Fechar</button>
+    </div>
+    ${renderProjectHistoryRows(projectId)}
+  `);
+  document.getElementById('close-modal')?.addEventListener('click', closeModal);
+}
+
 async function saveProjectItem(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   const projectId = event.currentTarget.dataset.projectId;
+  const project = await getOne('projects', projectId);
+  if (!project) return;
+  if (!canEditProject(project)) {
+    return toast('Você não tem permissão para editar esse projeto.', 'error');
+  }
+
   const itemId = event.currentTarget.dataset.itemId || null;
-  const existing = itemId ? await getOne("projectItems", itemId) : null;
+  const existing = itemId ? await getOne('projectItems', itemId) : null;
   const item = {
     ...existing,
-    id: existing?.id || createId("project_item"),
+    id: existing?.id || createId('project_item'),
     projectId,
-    entryKind: "item",
-    name: String(form.get("name") || "").trim(),
-    category: String(form.get("category") || "").trim(),
-    description: String(form.get("description") || "").trim(),
-    value: Number(form.get("value") || 0),
-    done: String(form.get("done")) === "true",
+    entryKind: 'item',
+    name: String(form.get('name') || '').trim(),
+    category: String(form.get('category') || '').trim(),
+    description: String(form.get('description') || '').trim(),
+    value: Number(form.get('value') || 0),
+    done: String(form.get('done')) === 'true',
     createdAt: existing?.createdAt || nowIso(),
     updatedAt: nowIso(),
-    syncStatus: "pending",
+    syncStatus: 'pending',
     isDeleted: false,
     version: (existing?.version || 0) + 1,
+    workspaceKey: getProjectWorkspaceKey(project),
+    ...getCurrentActorMeta(),
   };
-  if (!item.name) return toast("Informe o nome do item.", "error");
-  if (!(item.value > 0))
-    return toast("Informe um valor válido para o item.", "error");
-  await putOne("projectItems", item);
-  await enqueueSync("projectItems", item.id);
+  if (!item.name) return toast('Informe o nome do item.', 'error');
+  if (!(item.value > 0)) return toast('Informe um valor válido para o item.', 'error');
+  await putOne('projectItems', item);
+  await enqueueSync('projectItems', item.id);
   await syncProjectAggregate(projectId);
+
+  if (!existing) {
+    await createProjectAuditLog(project, 'project_item_created', {
+      relatedItemId: item.id,
+      relatedItemName: item.name,
+      newValue: item.name,
+      amount: item.value,
+    });
+  } else {
+    for (const [field, label] of Object.entries({
+      name: 'Nome do item',
+      category: 'Categoria',
+      description: 'Descrição',
+      value: 'Valor',
+      done: 'Status',
+    })) {
+      if ((existing?.[field] ?? '') === (item?.[field] ?? '')) continue;
+      await createProjectAuditLog(project, 'project_item_updated', {
+        field,
+        fieldLabel: label,
+        relatedItemId: item.id,
+        relatedItemName: item.name,
+        previousValue: existing?.[field] ?? null,
+        newValue: item?.[field] ?? null,
+      });
+    }
+  }
+
   await loadState();
   closeModal();
-  toast(
-    existing ? "Item do projeto atualizado." : "Item do projeto salvo.",
-    "success",
-  );
+  toast(existing ? 'Item do projeto atualizado.' : 'Item do projeto salvo.', 'success');
 }
 
 async function saveProjectContribution(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   const projectId = event.currentTarget.dataset.projectId;
-  const contributorKey = String(form.get("contributorKey") || "");
-  const amount = Number(form.get("amount") || 0);
-  const date = String(form.get("date") || "");
-  if (!contributorKey) return toast("Selecione quem guardou o valor.", "error");
-  if (!(amount > 0)) return toast("Informe um valor válido.", "error");
-  const [contributorType, contributorId] = contributorKey.split(":");
+  const project = await getOne('projects', projectId);
+  if (!project) return;
+  if (!canEditProject(project)) {
+    return toast('Você não tem permissão para lançar aportes nesse projeto.', 'error');
+  }
+
+  const contributorKey = String(form.get('contributorKey') || '');
+  const amount = Number(form.get('amount') || 0);
+  const date = String(form.get('date') || '');
+  if (!contributorKey) return toast('Selecione quem guardou o valor.', 'error');
+  if (!(amount > 0)) return toast('Informe um valor válido.', 'error');
+  const [contributorType, contributorId] = contributorKey.split(':');
   const currentUser = getCurrentUser();
-  const participant = state.data.projectParticipants.find(
-    (item) => item.id === contributorId,
-  );
-  const contributorName =
-    contributorType === "user"
-      ? currentUser?.name || "Usuário"
-      : participant?.name || "Participante";
+  const participant = state.data.projectParticipants.find((item) => item.id === contributorId);
+  const contributorName = contributorType === 'user'
+    ? currentUser?.name || 'Usuário'
+    : participant?.name || 'Participante';
   const record = {
-    id: createId("project_entry"),
+    id: createId('project_entry'),
     projectId,
-    entryKind: "contribution",
+    entryKind: 'contribution',
     contributorType,
     contributorId,
     contributorName,
     amount,
-    label: String(form.get("label") || "").trim(),
+    label: String(form.get('label') || '').trim(),
     date,
     createdAt: nowIso(),
     updatedAt: nowIso(),
-    syncStatus: "pending",
+    syncStatus: 'pending',
     isDeleted: false,
     version: 1,
+    workspaceKey: getProjectWorkspaceKey(project),
+    ...getCurrentActorMeta(),
   };
-  await putOne("projectItems", record);
-  await enqueueSync("projectItems", record.id);
+  await putOne('projectItems', record);
+  await enqueueSync('projectItems', record.id);
   await syncProjectAggregate(projectId);
+  await createProjectAuditLog(project, 'project_contribution_added', {
+    amount,
+    newValue: amount,
+    relatedUserId: contributorId,
+    relatedUserName: contributorName,
+    notes: record.label || '',
+  });
   await loadState();
   closeModal();
-  toast(`Aporte registrado para ${contributorName}.`, "success");
+  toast(`Aporte registrado para ${contributorName}.`, 'success');
 }
 
 async function saveProject(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   const currentUser = getCurrentUser();
-  const name = String(form.get("name") || "").trim();
-  const notes = String(form.get("notes") || "").trim();
-  const themeKey = normalizeProjectThemeKey(
-    form.get("themeKey"),
-    `${name} ${notes}`,
-  );
+  const name = String(form.get('name') || '').trim();
+  const notes = String(form.get('notes') || '').trim();
+  const themeKey = normalizeProjectThemeKey(form.get('themeKey'), `${name} ${notes}`);
 
   const project = {
-    id: createId("project"),
+    id: createId('project'),
     name,
     notes,
-    icon: String(form.get("icon") || "").trim() || "✨",
+    icon: String(form.get('icon') || '').trim() || '✨',
     themeKey,
     coverImageUrl: PROJECT_THEMES[themeKey].coverUrl,
     ownerUserId: currentUser?.id || null,
+    ownerUserName: currentUser?.name || '',
+    ownerLogin: currentUser?.login || '',
+    ownerWorkspaceKey: currentUser?.workspaceKey || '',
+    sharedUsers: [],
+    sharedUserIds: [],
     createdAt: nowIso(),
     updatedAt: nowIso(),
-    syncStatus: "pending",
+    syncStatus: 'pending',
     isDeleted: false,
     version: 1,
+    workspaceKey: currentUser?.workspaceKey || null,
   };
 
-  if (!project.name) return toast("Informe um nome para o projeto.", "error");
-  await putOne("projects", project);
+  if (!project.name) return toast('Informe um nome para o projeto.', 'error');
+  await putOne('projects', project);
   await syncProjectAggregate(project.id);
+  await createProjectAuditLog(project, 'project_created', { newValue: project.name });
   await loadState();
   patchUi({
     selectedProjectId: project.id,
-    projectTab: "checklist",
-    projectFilterCategory: "Tudo",
-    projectFilterStatus: "tudo",
+    projectTab: 'checklist',
+    projectFilterCategory: 'Tudo',
+    projectFilterStatus: 'tudo',
   });
   event.currentTarget.reset();
-  toast("Projeto criado.", "success");
+  toast('Projeto criado.', 'success');
 }
 
 async function saveProjectEdit(event) {
   event.preventDefault();
   const projectId = event.currentTarget.dataset.projectId;
-  const existing = await getOne("projects", projectId);
+  const existing = await getOne('projects', projectId);
   if (!existing) return;
+  if (!canEditProject(existing)) {
+    return toast('Você não tem permissão para editar esse projeto.', 'error');
+  }
+
   const form = new FormData(event.currentTarget);
-  const name = String(form.get("name") || "").trim();
-  const notes = String(form.get("notes") || "").trim();
-  const themeKey = normalizeProjectThemeKey(
-    form.get("themeKey"),
-    `${name} ${notes}`,
-  );
+  const name = String(form.get('name') || '').trim();
+  const notes = String(form.get('notes') || '').trim();
+  const themeKey = normalizeProjectThemeKey(form.get('themeKey'), `${name} ${notes}`);
   const updated = {
     ...existing,
     name,
     notes,
-    icon: String(form.get("icon") || "").trim() || "✨",
+    icon: String(form.get('icon') || '').trim() || '✨',
     themeKey,
     coverImageUrl: PROJECT_THEMES[themeKey].coverUrl,
+    ownerUserId: existing.ownerUserId || getCurrentUser()?.id || null,
+    ownerUserName: existing.ownerUserName || getCurrentUser()?.name || '',
+    ownerLogin: existing.ownerLogin || getCurrentUser()?.login || '',
+    ownerWorkspaceKey: existing.ownerWorkspaceKey || getCurrentUser()?.workspaceKey || getProjectWorkspaceKey(existing),
+    sharedUsers: getProjectSharedUsers(existing),
+    sharedUserIds: getProjectSharedUsers(existing).map((user) => user.id),
     updatedAt: nowIso(),
-    syncStatus: "pending",
+    syncStatus: 'pending',
     version: (existing.version || 0) + 1,
+    workspaceKey: getProjectWorkspaceKey(existing),
   };
-  if (!updated.name) return toast("Informe um nome para o projeto.", "error");
-  await putOne("projects", updated);
+  if (!updated.name) return toast('Informe um nome para o projeto.', 'error');
+  await putOne('projects', updated);
   await syncProjectAggregate(projectId);
+  await logProjectFieldChanges(updated, existing, updated, {
+    name: 'Nome',
+    notes: 'Descrição',
+    icon: 'Ícone',
+    themeKey: 'Tema',
+  });
   await loadState();
   closeModal();
-  toast("Projeto atualizado.", "success");
+  toast('Projeto atualizado.', 'success');
 }
 
 function deleteProject(projectId) {
   confirmDialog({
-    title: "Excluir projeto",
+    title: 'Excluir projeto',
     message:
-      "O projeto será marcado como excluído. Os itens e participantes também serão removidos da visão atual.",
-    confirmText: "Excluir projeto",
-    tone: "danger",
+      'O projeto será marcado como excluído. Os itens, participantes e histórico continuarão rastreáveis na sincronização.',
+    confirmText: 'Excluir projeto',
+    tone: 'danger',
     onConfirm: async () => {
       const [project, items, participants] = await Promise.all([
-        getOne("projects", projectId),
-        getAll("projectItems"),
-        getAll("projectParticipants"),
+        getOne('projects', projectId),
+        getAll('projectItems'),
+        getAll('projectParticipants'),
       ]);
       if (!project) return;
+      if (!isProjectOwner(project)) {
+        return toast('Somente o dono pode excluir o projeto.', 'error');
+      }
 
       const projectUpdated = {
         ...project,
         isDeleted: true,
         updatedAt: nowIso(),
-        syncStatus: "pending",
+        syncStatus: 'pending',
         version: (project.version || 0) + 1,
       };
-      await putOne("projects", projectUpdated);
-      await enqueueSync("projects", projectUpdated.id);
+      await putOne('projects', projectUpdated);
+      await enqueueSync('projects', projectUpdated.id);
+      await createProjectAuditLog(project, 'project_deleted', { previousValue: project.name });
 
-      const relatedItems = items.filter(
-        (item) => item.projectId === projectId && !item.isDeleted,
-      );
+      const relatedItems = items.filter((item) => item.projectId === projectId && !item.isDeleted);
       for (const item of relatedItems) {
         const updatedItem = {
           ...item,
           isDeleted: true,
           updatedAt: nowIso(),
-          syncStatus: "pending",
+          syncStatus: 'pending',
           version: (item.version || 0) + 1,
         };
-        await putOne("projectItems", updatedItem);
-        await enqueueSync("projectItems", updatedItem.id);
+        await putOne('projectItems', updatedItem);
+        await enqueueSync('projectItems', updatedItem.id);
       }
 
-      const relatedParticipants = participants.filter(
-        (item) => item.projectId === projectId && !item.isDeleted,
-      );
+      const relatedParticipants = participants.filter((item) => item.projectId === projectId && !item.isDeleted);
       for (const participant of relatedParticipants) {
         const updatedParticipant = {
           ...participant,
           isDeleted: true,
           updatedAt: nowIso(),
-          syncStatus: "pending",
+          syncStatus: 'pending',
           version: (participant.version || 0) + 1,
         };
-        await putOne("projectParticipants", updatedParticipant);
-        await enqueueSync("projectParticipants", updatedParticipant.id);
+        await putOne('projectParticipants', updatedParticipant);
+        await enqueueSync('projectParticipants', updatedParticipant.id);
       }
 
       await loadState();
       patchUi({
         selectedProjectId: null,
-        projectTab: "checklist",
-        projectFilterCategory: "Tudo",
-        projectFilterStatus: "tudo",
+        projectTab: 'checklist',
+        projectFilterCategory: 'Tudo',
+        projectFilterStatus: 'tudo',
       });
-      toast("Projeto excluído.", "success");
+      toast('Projeto excluído.', 'success');
     },
   });
 }
@@ -868,80 +1330,114 @@ async function saveParticipant(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   const projectId = event.currentTarget.dataset.projectId;
-  const name = String(form.get("name") || "").trim();
-  if (!name) return toast("Informe o nome do participante.", "error");
+  const project = await getOne('projects', projectId);
+  if (!project) return;
+  if (!isProjectOwner(project)) {
+    return toast('Somente o dono pode gerenciar participantes financeiros manuais.', 'error');
+  }
+
+  const name = String(form.get('name') || '').trim();
+  if (!name) return toast('Informe o nome do participante.', 'error');
   const exists = state.data.projectParticipants.some(
     (item) =>
       !item.isDeleted &&
       item.projectId === projectId &&
       item.name.toLowerCase() === name.toLowerCase(),
   );
-  if (exists)
-    return toast("Esse participante já existe nesse projeto.", "error");
+  if (exists) return toast('Esse participante já existe nesse projeto.', 'error');
   const participant = {
-    id: createId("participant"),
+    id: createId('participant'),
     projectId,
     name,
     createdAt: nowIso(),
     updatedAt: nowIso(),
-    syncStatus: "pending",
+    syncStatus: 'pending',
     isDeleted: false,
     version: 1,
+    workspaceKey: getProjectWorkspaceKey(project),
+    ...getCurrentActorMeta(),
   };
-  await putOne("projectParticipants", participant);
-  await enqueueSync("projectParticipants", participant.id);
+  await putOne('projectParticipants', participant);
+  await enqueueSync('projectParticipants', participant.id);
   await syncProjectAggregate(projectId);
+  await createProjectAuditLog(project, 'project_participant_added', {
+    relatedUserId: participant.id,
+    relatedUserName: participant.name,
+    newValue: participant.name,
+  });
   await loadState();
-  toast("Participante adicionado.", "success");
+  toast('Participante adicionado.', 'success');
   event.currentTarget.reset();
 }
 
 async function toggleProjectItem(itemId) {
-  const existing = await getOne("projectItems", itemId);
+  const existing = await getOne('projectItems', itemId);
   if (!existing) return;
+  const project = await getOne('projects', existing.projectId);
+  if (!project) return;
+  if (!canEditProject(project)) {
+    return toast('Você não tem permissão para atualizar esse item.', 'error');
+  }
+
   const updated = {
     ...existing,
     done: !existing.done,
     updatedAt: nowIso(),
     version: (existing.version || 0) + 1,
-    syncStatus: "pending",
+    syncStatus: 'pending',
   };
-  await putOne("projectItems", updated);
-  await enqueueSync("projectItems", updated.id);
+  await putOne('projectItems', updated);
+  await enqueueSync('projectItems', updated.id);
   await syncProjectAggregate(updated.projectId);
+  await createProjectAuditLog(project, 'project_item_toggled', {
+    relatedItemId: updated.id,
+    relatedItemName: updated.name,
+    field: 'done',
+    fieldLabel: 'Status',
+    previousValue: existing.done,
+    newValue: updated.done,
+  });
   await loadState();
 }
 
 function deleteProjectItem(itemId) {
   confirmDialog({
-    title: "Excluir item do projeto",
+    title: 'Excluir item do projeto',
     message:
-      "Esse item será removido do planejamento e da soma total do projeto.",
-    confirmText: "Excluir item",
-    tone: "danger",
+      'Esse item será removido do planejamento e da soma total do projeto.',
+    confirmText: 'Excluir item',
+    tone: 'danger',
     onConfirm: async () => {
-      const existing = await getOne("projectItems", itemId);
+      const existing = await getOne('projectItems', itemId);
       if (!existing) return;
+      const project = await getOne('projects', existing.projectId);
+      if (!project) return;
+      if (!canEditProject(project)) {
+        return toast('Você não tem permissão para excluir esse item.', 'error');
+      }
       const updated = {
         ...existing,
         isDeleted: true,
         updatedAt: nowIso(),
         version: (existing.version || 0) + 1,
-        syncStatus: "pending",
+        syncStatus: 'pending',
       };
-      await putOne("projectItems", updated);
-      await enqueueSync("projectItems", updated.id);
+      await putOne('projectItems', updated);
+      await enqueueSync('projectItems', updated.id);
       await syncProjectAggregate(updated.projectId);
+      await createProjectAuditLog(project, 'project_item_deleted', {
+        relatedItemId: updated.id,
+        relatedItemName: existing.name,
+        previousValue: existing.name,
+      });
       await loadState();
-      toast("Item removido.", "success");
+      toast('Item removido.', 'success');
     },
   });
 }
 
 export function bindProjectsEvents() {
-  document
-    .getElementById("project-form")
-    ?.addEventListener("submit", saveProject);
+  document.getElementById("project-form")?.addEventListener("submit", saveProject);
   document.getElementById("new-project-btn")?.addEventListener("click", () => {
     if (state.ui.selectedProjectId) {
       patchUi({
@@ -956,93 +1452,78 @@ export function bindProjectsEvents() {
       .getElementById("project-form")
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
   });
-  document
-    .getElementById("project-back-btn")
-    ?.addEventListener("click", () =>
+  document.getElementById("project-back-btn")?.addEventListener("click", () =>
+    patchUi({
+      selectedProjectId: null,
+      projectTab: "checklist",
+      projectFilterCategory: "Tudo",
+      projectFilterStatus: "tudo",
+    }),
+  );
+  document.getElementById("add-project-item-btn")?.addEventListener("click", () =>
+    openProjectItemModal(getSelectedProject()?.id),
+  );
+  document.getElementById("edit-project-btn")?.addEventListener("click", () =>
+    openProjectEditModal(getSelectedProject()?.id),
+  );
+  document.getElementById("delete-project-btn")?.addEventListener("click", () =>
+    deleteProject(getSelectedProject()?.id),
+  );
+  document.getElementById("project-share-btn")?.addEventListener("click", () =>
+    openProjectShareModal(getSelectedProject()?.id),
+  );
+  document.getElementById("project-share-btn-secondary")?.addEventListener("click", () =>
+    openProjectShareModal(getSelectedProject()?.id),
+  );
+  document.getElementById("project-history-btn")?.addEventListener("click", () =>
+    openProjectHistoryModal(getSelectedProject()?.id),
+  );
+  document.getElementById("project-history-btn-secondary")?.addEventListener("click", () =>
+    openProjectHistoryModal(getSelectedProject()?.id),
+  );
+  document.getElementById("add-project-contribution-btn")?.addEventListener("click", () =>
+    openContributionModal(getSelectedProject()?.id),
+  );
+  document.getElementById("project-participant-form")?.addEventListener("submit", saveParticipant);
+
+  document.querySelectorAll("[data-project-open]").forEach((button) =>
+    button.addEventListener("click", () =>
       patchUi({
-        selectedProjectId: null,
+        selectedProjectId: button.dataset.projectOpen,
         projectTab: "checklist",
         projectFilterCategory: "Tudo",
         projectFilterStatus: "tudo",
       }),
-    );
-  document
-    .getElementById("add-project-item-btn")
-    ?.addEventListener("click", () =>
-      openProjectItemModal(getSelectedProject()?.id),
-    );
-  document
-    .getElementById("edit-project-btn")
-    ?.addEventListener("click", () =>
-      openProjectEditModal(getSelectedProject()?.id),
-    );
-  document
-    .getElementById("delete-project-btn")
-    ?.addEventListener("click", () => deleteProject(getSelectedProject()?.id));
-  document
-    .getElementById("add-project-contribution-btn")
-    ?.addEventListener("click", () =>
-      openContributionModal(getSelectedProject()?.id),
-    );
-  document
-    .getElementById("project-participant-form")
-    ?.addEventListener("submit", saveParticipant);
-
-  document
-    .querySelectorAll("[data-project-open]")
-    .forEach((button) =>
-      button.addEventListener("click", () =>
-        patchUi({
-          selectedProjectId: button.dataset.projectOpen,
-          projectTab: "checklist",
-          projectFilterCategory: "Tudo",
-          projectFilterStatus: "tudo",
-        }),
-      ),
-    );
-  document
-    .querySelectorAll("[data-project-tab]")
-    .forEach((button) =>
-      button.addEventListener("click", () =>
-        patchUi({ projectTab: button.dataset.projectTab }),
-      ),
-    );
-  document
-    .querySelectorAll("[data-project-category]")
-    .forEach((button) =>
-      button.addEventListener("click", () =>
-        patchUi({ projectFilterCategory: button.dataset.projectCategory }),
-      ),
-    );
-  document
-    .querySelectorAll("[data-project-status]")
-    .forEach((button) =>
-      button.addEventListener("click", () =>
-        patchUi({ projectFilterStatus: button.dataset.projectStatus }),
-      ),
-    );
-  document
-    .querySelectorAll("[data-project-toggle-item]")
-    .forEach((button) =>
-      button.addEventListener("click", () =>
-        toggleProjectItem(button.dataset.projectToggleItem),
-      ),
-    );
-  document
-    .querySelectorAll("[data-project-edit-item]")
-    .forEach((button) =>
-      button.addEventListener("click", () =>
-        openProjectItemModal(
-          getSelectedProject()?.id,
-          button.dataset.projectEditItem,
-        ),
-      ),
-    );
-  document
-    .querySelectorAll("[data-project-delete-item]")
-    .forEach((button) =>
-      button.addEventListener("click", () =>
-        deleteProjectItem(button.dataset.projectDeleteItem),
-      ),
-    );
+    ),
+  );
+  document.querySelectorAll("[data-project-tab]").forEach((button) =>
+    button.addEventListener("click", () =>
+      patchUi({ projectTab: button.dataset.projectTab }),
+    ),
+  );
+  document.querySelectorAll("[data-project-category]").forEach((button) =>
+    button.addEventListener("click", () =>
+      patchUi({ projectFilterCategory: button.dataset.projectCategory }),
+    ),
+  );
+  document.querySelectorAll("[data-project-status]").forEach((button) =>
+    button.addEventListener("click", () =>
+      patchUi({ projectFilterStatus: button.dataset.projectStatus }),
+    ),
+  );
+  document.querySelectorAll("[data-project-toggle-item]").forEach((button) =>
+    button.addEventListener("click", () =>
+      toggleProjectItem(button.dataset.projectToggleItem),
+    ),
+  );
+  document.querySelectorAll("[data-project-edit-item]").forEach((button) =>
+    button.addEventListener("click", () =>
+      openProjectItemModal(getSelectedProject()?.id, button.dataset.projectEditItem),
+    ),
+  );
+  document.querySelectorAll("[data-project-delete-item]").forEach((button) =>
+    button.addEventListener("click", () =>
+      deleteProjectItem(button.dataset.projectDeleteItem),
+    ),
+  );
 }
