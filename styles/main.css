@@ -962,7 +962,7 @@ body {
 }
 .project-summary-metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 12px;
 }
 .project-summary-metrics span {
@@ -1211,8 +1211,7 @@ body {
 @media (max-width: 1023px) {
   .project-kpi-grid,
   .project-analytics-grid,
-  .project-finance-grid,
-  .project-summary-metrics {
+  .project-finance-grid {
     grid-template-columns: 1fr;
   }
 }
