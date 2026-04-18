@@ -1,4 +1,4 @@
-import { state, loadState, getDerivedAccounts } from "../state.js";
+import { state, loadState } from "../state.js";
 import {
   pageHeader,
   openModal,
@@ -18,6 +18,8 @@ import {
 } from "../utils/validators.js";
 import { SheetsService } from "../services/sheets.js";
 import { getCurrentUser } from "./onboarding.js";
+import { renderMetricCard, renderEmptyState, renderActivityFeed } from "../services/render-helpers.js";
+import { renderActionButton, renderActionGroup, renderInfoTiles } from "../services/ui-fragments.js";
 
 let goalShareModalState = null;
 
@@ -86,49 +88,6 @@ function getVisibleGoals() {
   return state.data.goals.filter((item) => !item.isDeleted);
 }
 
-function getTransferableAccounts() {
-  return getDerivedAccounts().filter((account) => !account.isDeleted);
-}
-
-function renderTransferAccountOptions(selectedId = "") {
-  const accounts = getTransferableAccounts();
-  return `
-    <option value="">Não movimentar conta</option>
-    ${accounts
-      .map(
-        (account) => `<option value="${account.id}" ${selectedId === account.id ? "selected" : ""}>${account.name} • ${currency(Number(account.derivedBalance || 0))}</option>`,
-      )
-      .join("")}
-  `;
-}
-
-async function createGoalLinkedAccountAdjustment(goal, amount, bankAccountId, mode, date, notes = "") {
-  if (!bankAccountId) return null;
-
-  const record = {
-    id: createId("tx"),
-    description: `${mode === "remove" ? "[Meta] Resgate" : "[Meta] Aporte"} • ${goal.name}`,
-    type: "adjustment",
-    accountId: bankAccountId,
-    amount: mode === "remove" ? Number(amount || 0) : -Number(amount || 0),
-    date: date || formatDateInput(),
-    category: "Meta",
-    notes: notes || `${mode === "remove" ? "Resgate" : "Aporte"} vinculado à meta ${goal.name}`,
-    relatedEntityType: "goal",
-    relatedEntityId: goal.id,
-    relatedMovementKind: mode === "remove" ? "goal_withdrawal" : "goal_contribution",
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
-    version: 1,
-    syncStatus: "pending",
-    isDeleted: false,
-  };
-
-  await putOne("transactions", record);
-  await enqueueSync("transactions", record.id);
-  return record;
-}
-
 function getGoalActivity(goalId) {
   return state.data.auditLogs
     .filter(
@@ -166,8 +125,6 @@ function buildGoalActivityLabel(log) {
       return `${actor} adicionou ${currency(Number(log.newValue || 0))} à meta.`;
     case "goal_contribution_removed":
       return `${actor} removeu ${currency(Number(log.newValue || 0))} da meta.`;
-    case "goal_account_transfer_linked":
-      return `${actor} vinculou uma movimentação com a conta ${log.relatedUserName || log.newValue || "selecionada"}.`;
     case "goal_updated":
       return `${actor} alterou ${fieldLabel} de ${formatActivityValue(log.previousValue)} para ${formatActivityValue(log.newValue)}.`;
     default:
@@ -177,18 +134,14 @@ function buildGoalActivityLabel(log) {
 
 function renderGoalActivityPreview(goalId) {
   const logs = getGoalActivity(goalId).slice(0, 3);
-  if (!logs.length) {
-    return `<div class="text-sm text-slate-500">Sem atividade recente.</div>`;
-  }
-  return logs
-    .map(
-      (log) => `
-        <div class="surface-soft rounded-[20px] p-3 border border-slate-100">
-          <div class="font-semibold text-slate-900">${buildGoalActivityLabel(log)}</div>
-          <div class="text-xs text-slate-500 mt-1">${datePt((log.timestamp || log.updatedAt || "").slice(0, 10))}</div>
-        </div>`,
-    )
-    .join("");
+  return renderActivityFeed(logs, {
+    emptyText: "Sem atividade recente.",
+    containerClassName: "space-y-3",
+    itemClassName: "surface-soft rounded-[20px] p-3 border border-slate-100",
+    metaClassName: "text-xs text-slate-500 mt-1",
+    buildLabel: (log) => buildGoalActivityLabel(log),
+    buildMeta: (log) => datePt((log.timestamp || log.updatedAt || "").slice(0, 10)),
+  });
 }
 
 async function createGoalAuditLog(goal, actionType, details = {}) {
@@ -335,24 +288,69 @@ function renderGoalCard(goal) {
         <div class="flex items-center justify-between text-sm text-slate-500 mb-2"><span>Acumulado</span><span>${currency(goal.currentAmount || 0)} de ${currency(goal.targetAmount || 0)}</span></div>
         <div class="progress-rail"><span style="width:${progress}%"></span></div>
       </div>
-      <div class="grid md:grid-cols-2 gap-3 mt-5 text-sm text-slate-500">
-        <div class="rounded-2xl bg-slate-50 border border-slate-100 px-4 py-3">Prazo<br><strong class="text-slate-900">${goal.targetDate ? datePt(goal.targetDate) : "Sem prazo"}</strong></div>
-        <div class="rounded-2xl bg-slate-50 border border-slate-100 px-4 py-3">Aporte recente<br><strong class="text-slate-900">${currency(goal.lastContribution || 0)}</strong></div>
-      </div>
+      ${renderInfoTiles(
+        [
+          {
+            label: "Prazo",
+            value: goal.targetDate ? datePt(goal.targetDate) : "Sem prazo",
+          },
+          {
+            label: "Aporte recente",
+            value: currency(goal.lastContribution || 0),
+          },
+        ],
+        {
+          gridClassName: "grid md:grid-cols-2 gap-3 mt-5 text-sm",
+        },
+      )}
       <div class="flex flex-wrap gap-2 mt-4">
         ${sharedUsers.length ? sharedUsers.map((user) => `<span class="project-person-pill">${user.name || `@${user.login}`}</span>`).join("") : `<span class="text-xs text-slate-500">Meta individual</span>`}
       </div>
       <div class="mt-5 space-y-3">
         ${renderGoalActivityPreview(goal.id)}
       </div>
-      <div class="mt-5 flex gap-3 flex-wrap">
-        ${canEdit ? `<button class="action-btn action-btn-primary" data-goal-contribute="${goal.id}">Adicionar valor</button>` : ""}
-        ${canEdit ? `<button class="action-btn action-btn-danger-soft" data-goal-withdraw="${goal.id}">Remover valor</button>` : ""}
-        ${canEdit ? `<button class="action-btn" data-goal-edit="${goal.id}">Editar</button>` : ""}
-        <button class="action-btn" data-goal-history="${goal.id}">Atividade</button>
-        ${canOwnerManage ? `<button class="action-btn" data-goal-share="${goal.id}">Compartilhar</button>` : ""}
-        ${canOwnerManage ? `<button class="action-btn action-btn-danger-soft" data-goal-delete="${goal.id}">Excluir</button>` : ""}
-      </div>
+      ${renderActionGroup(
+        [
+          canEdit
+            ? renderActionButton({
+                label: "Adicionar valor",
+                tone: "primary",
+                attrs: `data-goal-contribute="${goal.id}"`,
+              })
+            : "",
+          canEdit
+            ? renderActionButton({
+                label: "Remover valor",
+                tone: "danger-soft",
+                attrs: `data-goal-withdraw="${goal.id}"`,
+              })
+            : "",
+          canEdit
+            ? renderActionButton({
+                label: "Editar",
+                attrs: `data-goal-edit="${goal.id}"`,
+              })
+            : "",
+          renderActionButton({
+            label: "Atividade",
+            attrs: `data-goal-history="${goal.id}"`,
+          }),
+          canOwnerManage
+            ? renderActionButton({
+                label: "Compartilhar",
+                attrs: `data-goal-share="${goal.id}"`,
+              })
+            : "",
+          canOwnerManage
+            ? renderActionButton({
+                label: "Excluir",
+                tone: "danger-soft",
+                attrs: `data-goal-delete="${goal.id}"`,
+              })
+            : "",
+        ],
+        { className: "mt-5 flex gap-3 flex-wrap" },
+      )}
     </article>`;
 }
 
@@ -594,9 +592,11 @@ async function openGoalHistoryModal(goalId) {
       </div>
       <button id="close-modal" class="action-btn">Fechar</button>
     </div>
-    <div class="space-y-3 max-h-[55vh] overflow-auto">
-      ${logs.length ? logs.map((log) => `<article class="surface-soft rounded-[22px] p-4 border border-slate-100"><div class="font-semibold text-slate-900">${buildGoalActivityLabel(log)}</div><div class="text-sm text-slate-500 mt-2">${log.fieldLabel || log.field || "Atividade"} • ${log.actorUserName || "Usuário"} • ${datePt((log.timestamp || log.updatedAt || "").slice(0, 10))}</div></article>`).join("") : `<div class="text-sm text-slate-500">Nenhuma atividade registrada ainda.</div>`}
-    </div>
+    ${renderActivityFeed(logs, {
+      containerClassName: "space-y-3 max-h-[55vh] overflow-auto",
+      buildLabel: (log) => buildGoalActivityLabel(log),
+      buildMeta: (log) => `${log.fieldLabel || log.field || "Atividade"} • ${log.actorUserName || "Usuário"} • ${datePt((log.timestamp || log.updatedAt || "").slice(0, 10))}`,
+    })}
   `);
   document.getElementById("close-modal")?.addEventListener("click", closeModal);
 }
@@ -637,17 +637,6 @@ async function openGoalContributionModal(goalId, mode = "add") {
         <label class="text-sm font-semibold mb-2 block">Valor da ${isRemove ? "retirada" : "movimentação"}</label>
         <input name="amount" type="number" min="0.01" step="0.01" class="field" placeholder="0,00" required />
       </div>
-      <div class="grid md:grid-cols-2 gap-4">
-        <div>
-          <label class="text-sm font-semibold mb-2 block">Data</label>
-          <input name="date" type="date" class="field" value="${formatDateInput()}" required />
-        </div>
-        <div>
-          <label class="text-sm font-semibold mb-2 block">${isRemove ? "Conta para receber" : "Conta de origem"}</label>
-          <select name="bankAccountId" class="select">${renderTransferAccountOptions("")}</select>
-          <div class="text-xs text-slate-500 mt-2">${isRemove ? "Opcional: credita o valor resgatado em uma conta." : "Opcional: debita o aporte de uma conta do app."}</div>
-        </div>
-      </div>
       <div>
         <label class="text-sm font-semibold mb-2 block">Observação</label>
         <textarea name="notes" class="textarea" rows="3" placeholder="Ex.: resgate da reserva, uso parcial, aporte mensal..."></textarea>
@@ -671,7 +660,6 @@ async function saveGoalContribution(event) {
   try {
     const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
     validatePositive(payload.amount, "Valor da movimentação");
-    validateRequired(payload.date, "Data");
 
     const goal = await getOne("goals", payload.goalId);
     if (!goal) throw new Error("Meta não encontrada.");
@@ -702,33 +690,12 @@ async function saveGoalContribution(event) {
     await putOne("goals", updated);
     await enqueueSync("goals", updated.id);
 
-    const linkedTransaction = await createGoalLinkedAccountAdjustment(
-      updated,
-      amount,
-      payload.bankAccountId || "",
-      payload.mode,
-      payload.date,
-      payload.notes || "",
-    );
-
     await createGoalAuditLog(updated, isRemove ? "goal_contribution_removed" : "goal_contribution_added", {
       field: "currentAmount",
       fieldLabel: isRemove ? "Retirada" : "Aporte",
       previousValue: currentAmount,
       newValue: amount,
     });
-
-    if (payload.bankAccountId) {
-      const linkedAccount = getTransferableAccounts().find((account) => account.id === payload.bankAccountId);
-      await createGoalAuditLog(updated, "goal_account_transfer_linked", {
-        field: "bankAccountId",
-        fieldLabel: isRemove ? "Conta de destino" : "Conta de origem",
-        previousValue: null,
-        newValue: linkedAccount?.name || payload.bankAccountId,
-        relatedUserId: linkedAccount?.id || null,
-        relatedUserName: linkedAccount?.name || "",
-      });
-    }
 
     if (payload.notes) {
       await createGoalAuditLog(updated, "goal_updated", {
@@ -741,16 +708,7 @@ async function saveGoalContribution(event) {
 
     await loadState();
     closeModal();
-    toast(
-      linkedTransaction
-        ? isRemove
-          ? "Valor removido da meta e creditado na conta."
-          : "Valor adicionado à meta e debitado da conta."
-        : isRemove
-          ? "Valor removido da meta com sucesso."
-          : "Valor adicionado à meta com sucesso.",
-      "success",
-    );
+    toast(isRemove ? "Valor removido da meta com sucesso." : "Valor adicionado à meta com sucesso.", "success");
   } catch (error) {
     toast(error.message, "error");
   }
@@ -786,11 +744,18 @@ function confirmGoalDelete(goalId) {
 }
 
 function metricCard(label, value, icon) {
-  return `<article class="card p-5"><div class="compact-stat-icon"><i class="fa-solid ${icon}"></i></div><div class="compact-stat-label mt-4">${label}</div><div class="compact-stat-value">${value}</div></article>`;
+  return renderMetricCard(label, value, icon, {
+    articleClassName: "card p-5",
+    labelClassName: "compact-stat-label mt-4",
+    valueClassName: "compact-stat-value",
+    iconClassName: "compact-stat-icon",
+  });
 }
 
 function emptyState(title, text) {
-  return `<div class="card p-10 text-center lg:col-span-3"><div class="text-xl font-bold">${title}</div><div class="text-slate-500 mt-2">${text}</div></div>`;
+  return renderEmptyState(title, text, {
+    className: "card p-10 text-center lg:col-span-3",
+  });
 }
 
 function addDays(days) {

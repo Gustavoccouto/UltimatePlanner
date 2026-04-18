@@ -1,4 +1,4 @@
-import { state, loadState, patchUi, getDerivedAccounts } from "../state.js";
+import { state, loadState, patchUi } from "../state.js";
 import {
   pageHeader,
   toast,
@@ -13,6 +13,8 @@ import { enqueueSync } from "../services/sync.js";
 import { currency, percent, datePt } from "../utils/formatters.js";
 import { getCurrentUser } from "./onboarding.js";
 import { SheetsService } from "../services/sheets.js";
+import { renderEmptyState, renderInlineEmpty, renderActivityFeed } from "../services/render-helpers.js";
+import { renderActionButton, renderActionGroup, renderInfoTiles, renderSectionIntro } from "../services/ui-fragments.js";
 
 const PROJECT_TABS = ["checklist", "analytics", "financas"];
 const STATUS_FILTERS = ["tudo", "pendentes", "concluidos"];
@@ -219,10 +221,6 @@ function buildProjectActivityLabel(log) {
       return `${actor} removeu ${log.relatedUserName || log.previousValue || 'um usuário'} do compartilhamento.`;
     case 'project_contribution_added':
       return `${actor} adicionou ${currency(Number(log.newValue || log.amount || 0))} ao caixa do projeto.`;
-    case 'project_contribution_removed':
-      return `${actor} removeu ${currency(Number(log.newValue || log.amount || 0))} do caixa do projeto.`;
-    case 'project_account_transfer_linked':
-      return `${actor} vinculou uma movimentação com a conta ${log.relatedUserName || log.newValue || 'selecionada'}.`;
     case 'project_item_created':
       return `${actor} criou o item ${log.relatedItemName || log.newValue || ''}.`.trim();
     case 'project_item_deleted':
@@ -241,21 +239,13 @@ function buildProjectActivityLabel(log) {
 
 function renderProjectActivityPreview(projectId, emptyText = 'Nenhuma atividade registrada ainda.') {
   const items = getProjectActivity(projectId).slice(0, 5);
-  if (!items.length) {
-    return `<div class="text-sm text-slate-500">${emptyText}</div>`;
-  }
-  return `
-    <div class="space-y-3">
-      ${items
-        .map(
-          (item) => `
-            <div class="surface-soft rounded-[22px] p-4 border border-slate-100">
-              <div class="font-semibold text-slate-900">${buildProjectActivityLabel(item)}</div>
-              <div class="text-xs text-slate-500 mt-1">${datePt((item.timestamp || item.updatedAt || '').slice(0, 10))} • ${item.actorUserName || 'Usuário'}</div>
-            </div>`,
-        )
-        .join('')}
-    </div>`;
+  return renderActivityFeed(items, {
+    emptyText,
+    containerClassName: "space-y-3",
+    buildLabel: (item) => buildProjectActivityLabel(item),
+    buildMeta: (item) => `${datePt((item.timestamp || item.updatedAt || '').slice(0, 10))} • ${item.actorUserName || 'Usuário'}`,
+    metaClassName: "text-xs text-slate-500 mt-1",
+  });
 }
 
 function matchesShareUser(user, query = '') {
@@ -406,49 +396,6 @@ function getContributorOptions(projectId) {
   return [...base, ...extras];
 }
 
-function getTransferableAccounts() {
-  return getDerivedAccounts().filter((account) => !account.isDeleted);
-}
-
-function renderProjectAccountOptions(selectedId = "") {
-  const accounts = getTransferableAccounts();
-  return `
-    <option value="">Não movimentar conta</option>
-    ${accounts
-      .map(
-        (account) => `<option value="${account.id}" ${selectedId === account.id ? "selected" : ""}>${account.name} • ${currency(Number(account.derivedBalance || 0))}</option>`,
-      )
-      .join("")}
-  `;
-}
-
-async function createProjectLinkedAccountAdjustment(project, amount, bankAccountId, mode, date, notes = "") {
-  if (!bankAccountId) return null;
-
-  const record = {
-    id: createId("tx"),
-    description: `${mode === "remove" ? "[Projeto] Retirada" : "[Projeto] Aporte"} • ${project.name}`,
-    type: "adjustment",
-    accountId: bankAccountId,
-    amount: mode === "remove" ? Number(amount || 0) : -Number(amount || 0),
-    date: date || formatDateInput(),
-    category: "Projeto",
-    notes: notes || `${mode === "remove" ? "Retirada" : "Aporte"} vinculado ao projeto ${project.name}`,
-    relatedEntityType: "project",
-    relatedEntityId: project.id,
-    relatedMovementKind: mode === "remove" ? "project_withdrawal" : "project_contribution",
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
-    version: 1,
-    syncStatus: "pending",
-    isDeleted: false,
-  };
-
-  await putOne("transactions", record);
-  await enqueueSync("transactions", record.id);
-  return record;
-}
-
 function getCategoryOptions(projectId) {
   const categories = [
     ...new Set(
@@ -546,7 +493,7 @@ function renderProjectList() {
       ${
         projects.length
           ? projects.map(projectGridCard).join("")
-          : `<div class="card p-8 text-center"><div class="text-lg font-bold">Nenhum projeto criado</div><p class="text-slate-500 mt-2">Crie o primeiro projeto e depois adicione itens, participantes e aportes em caixa.</p></div>`
+          : renderEmptyState('Nenhum projeto criado', 'Crie o primeiro projeto e depois adicione itens, participantes e aportes em caixa.', { className: 'card p-8 text-center', titleClassName: 'text-lg font-bold' })
       }
     </section>`;
 }
@@ -575,13 +522,44 @@ function renderProjectHeader(project, summary) {
               <h1 class="page-title !mb-0">${project.name}</h1>
               <p class="page-subtitle project-hero-subtitle">${project.notes || project.desc || "Projeto personalizado no UltimatePlanner."}</p>
             </div>
-            <div class="project-detail-actions">
-              ${canEdit ? `<button id="edit-project-btn" class="action-btn"><i class="fa-solid fa-pen mr-2"></i>Editar</button>` : ""}
-              <button id="project-history-btn" class="action-btn"><i class="fa-solid fa-clock-rotate-left mr-2"></i>Atividade</button>
-              ${canManageShare ? `<button id="project-share-btn" class="action-btn"><i class="fa-solid fa-users mr-2"></i>Compartilhar</button>` : ""}
-              ${canManageShare ? `<button id="delete-project-btn" class="action-btn action-btn-danger-soft"><i class="fa-solid fa-trash mr-2"></i>Excluir</button>` : ""}
-              <button id="new-project-btn" class="action-btn action-btn-primary"><i class="fa-solid fa-plus mr-2"></i>Novo projeto</button>
-            </div>
+            ${renderActionGroup(
+              [
+                canEdit
+                  ? renderActionButton({
+                      label: "Editar",
+                      icon: "pen",
+                      attrs: 'id="edit-project-btn"',
+                    })
+                  : "",
+                renderActionButton({
+                  label: "Atividade",
+                  icon: "clock-rotate-left",
+                  attrs: 'id="project-history-btn"',
+                }),
+                canManageShare
+                  ? renderActionButton({
+                      label: "Compartilhar",
+                      icon: "users",
+                      attrs: 'id="project-share-btn"',
+                    })
+                  : "",
+                canManageShare
+                  ? renderActionButton({
+                      label: "Excluir",
+                      icon: "trash",
+                      tone: "danger-soft",
+                      attrs: 'id="delete-project-btn"',
+                    })
+                  : "",
+                renderActionButton({
+                  label: "Novo projeto",
+                  icon: "plus",
+                  tone: "primary",
+                  attrs: 'id="new-project-btn"',
+                }),
+              ],
+              { className: "project-detail-actions" },
+            )}
           </div>
         </div>
       </article>
@@ -650,7 +628,7 @@ function renderChecklistTab(project, summary) {
         </article>`,
               )
               .join("")
-          : `<div class="card p-8 text-center text-slate-500">Nenhum item para esse filtro.</div>`
+          : renderEmptyState('Nenhum item para esse filtro', 'Ajuste o filtro ou adicione um novo item ao projeto.', { className: 'card p-8 text-center', titleClassName: 'text-lg font-bold' })
       }
     </section>`;
 }
@@ -688,12 +666,19 @@ function renderAnalyticsTab(project, summary) {
       </article>
       <article class="card p-5">
         <div class="section-title !text-[1.1rem]">Visão rápida</div>
-        <div class="grid grid-cols-2 gap-3 mt-5">
-          <div class="surface-soft rounded-[24px] p-4"><div class="text-sm text-slate-500">Itens pendentes</div><div class="text-2xl font-bold mt-2">${summary.pendingCount}</div></div>
-          <div class="surface-soft rounded-[24px] p-4"><div class="text-sm text-slate-500">Itens concluídos</div><div class="text-2xl font-bold mt-2">${summary.completedCount}</div></div>
-          <div class="surface-soft rounded-[24px] p-4"><div class="text-sm text-slate-500">Concluído em valor</div><div class="text-2xl font-bold mt-2">${currency(summary.totalDone)}</div></div>
-          <div class="surface-soft rounded-[24px] p-4"><div class="text-sm text-slate-500">Falta cobrir</div><div class="text-2xl font-bold mt-2">${currency(Math.max(summary.totalEstimated - summary.cashBalance, 0))}</div></div>
-        </div>
+        ${renderInfoTiles(
+          [
+            { label: "Itens pendentes", value: String(summary.pendingCount), tileClassName: "surface-soft rounded-[24px] p-4", valueClassName: "text-2xl font-bold mt-2" },
+            { label: "Itens concluídos", value: String(summary.completedCount), tileClassName: "surface-soft rounded-[24px] p-4", valueClassName: "text-2xl font-bold mt-2" },
+            { label: "Concluído em valor", value: currency(summary.totalDone), tileClassName: "surface-soft rounded-[24px] p-4", valueClassName: "text-2xl font-bold mt-2" },
+            { label: "Falta cobrir", value: currency(Math.max(summary.totalEstimated - summary.cashBalance, 0)), tileClassName: "surface-soft rounded-[24px] p-4", valueClassName: "text-2xl font-bold mt-2" },
+          ],
+          {
+            gridClassName: "grid grid-cols-2 gap-3 mt-5",
+            labelClassName: "text-sm text-slate-500",
+            valueClassName: "text-2xl font-bold mt-2",
+          },
+        )}
       </article>
     </section>`;
 }
@@ -705,14 +690,31 @@ function renderFinanceTab(project, summary) {
   const canManageShare = canManageProjectSharing(project);
   return `
     <section class="project-section-head">
-      <div>
-        <div class="section-title project-section-title">Finanças do projeto</div>
-      </div>
-      <div class="flex items-center gap-2 flex-wrap justify-end">
-        <button id="project-history-btn" class="action-btn">Atividade</button>
-        ${canManageShare ? `<button id="project-share-btn" class="action-btn">Compartilhar</button>` : ""}
-        <button id="add-project-contribution-btn" class="action-btn action-btn-primary">+ Aporte</button><button id="remove-project-contribution-btn" class="action-btn action-btn-danger-soft">- Retirada</button>
-      </div>
+      ${renderSectionIntro({
+        title: "Finanças do projeto",
+        className: "flex items-center justify-between gap-3 flex-wrap w-full",
+        titleClassName: "section-title project-section-title",
+        actionsHtml: renderActionGroup(
+          [
+            renderActionButton({
+              label: "Atividade",
+              attrs: 'id="project-history-btn"',
+            }),
+            canManageShare
+              ? renderActionButton({
+                  label: "Compartilhar",
+                  attrs: 'id="project-share-btn"',
+                })
+              : "",
+            renderActionButton({
+              label: "+ Aporte",
+              tone: "primary",
+              attrs: 'id="add-project-contribution-btn"',
+            }),
+          ],
+          { className: "flex items-center gap-2 flex-wrap justify-end" },
+        ),
+      })}
     </section>
 
     <section class="project-finance-grid">
@@ -908,19 +910,16 @@ async function openProjectEditModal(projectId) {
     ?.addEventListener("submit", saveProjectEdit);
 }
 
-function openContributionModal(projectId, mode = "add") {
+function openContributionModal(projectId) {
   const options = getContributorOptions(projectId);
-  const isRemove = mode === "remove";
   openModal(`
-    <div class="flex items-center justify-between mb-6"><div><div class="text-2xl font-bold">${isRemove ? "Retirada do projeto" : "Novo aporte no projeto"}</div><div class="text-sm text-slate-500 mt-1">${isRemove ? "Registre uma saída do caixa do projeto." : "Selecione quem guardou o valor para esse projeto."}</div></div><button id="close-modal" class="action-btn">Fechar</button></div>
+    <div class="flex items-center justify-between mb-6"><div><div class="text-2xl font-bold">Novo aporte no projeto</div><div class="text-sm text-slate-500 mt-1">Selecione quem guardou o valor para esse projeto.</div></div><button id="close-modal" class="action-btn">Fechar</button></div>
     <form id="project-contribution-form" data-project-id="${projectId}" class="grid md:grid-cols-2 gap-4">
-      <input type="hidden" name="mode" value="${mode}" />
-      <div><label class="text-sm font-semibold mb-2 block">${isRemove ? "Responsável pela retirada" : "Quem guardou"}</label><select name="contributorKey" class="select">${options.map((item) => `<option value="${item.type}:${item.id}">${item.label}</option>`).join("")}</select></div>
+      <div><label class="text-sm font-semibold mb-2 block">Quem guardou</label><select name="contributorKey" class="select">${options.map((item) => `<option value="${item.type}:${item.id}">${item.label}</option>`).join("")}</select></div>
       <div><label class="text-sm font-semibold mb-2 block">Valor</label><input name="amount" type="number" step="0.01" min="0.01" class="field" required /></div>
-      <div><label class="text-sm font-semibold mb-2 block">Descrição</label><input name="label" class="field" placeholder="${isRemove ? "Ex.: pagamento, devolução, retirada" : "Ex.: aporte semanal"}" /></div>
+      <div><label class="text-sm font-semibold mb-2 block">Descrição</label><input name="label" class="field" placeholder="Ex.: aporte semanal" /></div>
       <div><label class="text-sm font-semibold mb-2 block">Data</label><input name="date" type="date" class="field" value="${formatDateInput()}" required /></div>
-      <div class="md:col-span-2"><label class="text-sm font-semibold mb-2 block">${isRemove ? "Conta para receber" : "Conta de origem"}</label><select name="bankAccountId" class="select">${renderProjectAccountOptions("")}</select><div class="text-xs text-slate-500 mt-2">${isRemove ? "Opcional: credita a retirada em uma conta do app." : "Opcional: debita o aporte de uma conta do app."}</div></div>
-      <div class="md:col-span-2 flex justify-end gap-3 pt-2"><button type="button" id="cancel-project-contribution" class="action-btn">Cancelar</button><button class="action-btn ${isRemove ? "action-btn-danger-soft" : "action-btn-primary"}" type="submit">${isRemove ? "Salvar retirada" : "Salvar aporte"}</button></div>
+      <div class="md:col-span-2 flex justify-end gap-3 pt-2"><button type="button" id="cancel-project-contribution" class="action-btn">Cancelar</button><button class="action-btn action-btn-primary" type="submit">Salvar aporte</button></div>
     </form>`);
 
   document.getElementById("close-modal")?.addEventListener("click", closeModal);
@@ -940,7 +939,7 @@ function buildProjectShareRows(project, users, search = "") {
   const filtered = users.filter((user) => matchesShareUser(user, search));
 
   if (!filtered.length) {
-    return `<div class="text-sm text-slate-500 p-4 text-center">Nenhum usuário encontrado para esse filtro.</div>`;
+    return renderInlineEmpty('Nenhum usuário encontrado para esse filtro.', { className: 'text-sm text-slate-500 p-4 text-center' });
   }
 
   return filtered
@@ -1064,22 +1063,11 @@ async function toggleProjectSharedUser(projectId, userId) {
 
 function renderProjectHistoryRows(projectId) {
   const logs = getProjectActivity(projectId);
-  if (!logs.length) {
-    return `<div class="text-sm text-slate-500">Nenhuma atividade registrada ainda.</div>`;
-  }
-
-  return `
-    <div class="space-y-3 max-h-[55vh] overflow-auto">
-      ${logs
-        .map(
-          (log) => `
-            <article class="surface-soft rounded-[22px] p-4 border border-slate-100">
-              <div class="font-semibold text-slate-900">${buildProjectActivityLabel(log)}</div>
-              <div class="text-sm text-slate-500 mt-2">${log.fieldLabel || log.field || 'Atividade'} • ${log.actorUserName || 'Usuário'} • ${datePt((log.timestamp || log.updatedAt || '').slice(0, 10))}</div>
-            </article>`,
-        )
-        .join('')}
-    </div>`;
+  return renderActivityFeed(logs, {
+    containerClassName: "space-y-3 max-h-[55vh] overflow-auto",
+    buildLabel: (log) => buildProjectActivityLabel(log),
+    buildMeta: (log) => `${log.fieldLabel || log.field || 'Atividade'} • ${log.actorUserName || 'Usuário'} • ${datePt((log.timestamp || log.updatedAt || '').slice(0, 10))}`,
+  });
 }
 
 async function openProjectHistoryModal(projectId) {
@@ -1173,34 +1161,20 @@ async function saveProjectContribution(event) {
   const project = await getOne('projects', projectId);
   if (!project) return;
   if (!canEditProject(project)) {
-    return toast('Você não tem permissão para lançar movimentações nesse projeto.', 'error');
+    return toast('Você não tem permissão para lançar aportes nesse projeto.', 'error');
   }
 
-  const mode = String(form.get('mode') || 'add');
-  const isRemove = mode === 'remove';
   const contributorKey = String(form.get('contributorKey') || '');
   const amount = Number(form.get('amount') || 0);
   const date = String(form.get('date') || '');
-  const bankAccountId = String(form.get('bankAccountId') || '');
-
-  if (!contributorKey) return toast(isRemove ? 'Selecione quem retirou o valor.' : 'Selecione quem guardou o valor.', 'error');
+  if (!contributorKey) return toast('Selecione quem guardou o valor.', 'error');
   if (!(amount > 0)) return toast('Informe um valor válido.', 'error');
-  if (!date) return toast('Informe a data.', 'error');
-
-  const summary = getProjectSummary(projectId);
-  if (isRemove && amount > Number(summary.cashBalance || 0)) {
-    return toast('Não é possível retirar mais do que o saldo em caixa do projeto.', 'error');
-  }
-
   const [contributorType, contributorId] = contributorKey.split(':');
   const currentUser = getCurrentUser();
   const participant = state.data.projectParticipants.find((item) => item.id === contributorId);
   const contributorName = contributorType === 'user'
     ? currentUser?.name || 'Usuário'
     : participant?.name || 'Participante';
-
-  const signedAmount = isRemove ? -amount : amount;
-
   const record = {
     id: createId('project_entry'),
     projectId,
@@ -1208,7 +1182,7 @@ async function saveProjectContribution(event) {
     contributorType,
     contributorId,
     contributorName,
-    amount: signedAmount,
+    amount,
     label: String(form.get('label') || '').trim(),
     date,
     createdAt: nowIso(),
@@ -1217,55 +1191,21 @@ async function saveProjectContribution(event) {
     isDeleted: false,
     version: 1,
     workspaceKey: getProjectWorkspaceKey(project),
-    contributionMode: mode,
-    bankAccountId,
     ...getCurrentActorMeta(),
   };
   await putOne('projectItems', record);
   await enqueueSync('projectItems', record.id);
-
-  const linkedTransaction = await createProjectLinkedAccountAdjustment(
-    project,
-    amount,
-    bankAccountId,
-    mode,
-    date,
-    record.label || '',
-  );
-
   await syncProjectAggregate(projectId);
-  await createProjectAuditLog(project, isRemove ? 'project_contribution_removed' : 'project_contribution_added', {
+  await createProjectAuditLog(project, 'project_contribution_added', {
     amount,
     newValue: amount,
     relatedUserId: contributorId,
     relatedUserName: contributorName,
     notes: record.label || '',
   });
-
-  if (bankAccountId) {
-    const linkedAccount = getTransferableAccounts().find((account) => account.id === bankAccountId);
-    await createProjectAuditLog(project, 'project_account_transfer_linked', {
-      field: 'bankAccountId',
-      fieldLabel: isRemove ? 'Conta de destino' : 'Conta de origem',
-      previousValue: null,
-      newValue: linkedAccount?.name || bankAccountId,
-      relatedUserId: linkedAccount?.id || null,
-      relatedUserName: linkedAccount?.name || '',
-    });
-  }
-
   await loadState();
   closeModal();
-  toast(
-    linkedTransaction
-      ? isRemove
-        ? `Retirada registrada e creditada em ${getTransferableAccounts().find((item) => item.id === bankAccountId)?.name || 'conta'}.`
-        : `Aporte registrado e debitado da conta selecionada.`
-      : isRemove
-        ? `Retirada registrada para ${contributorName}.`
-        : `Aporte registrado para ${contributorName}.`,
-    'success',
-  );
+  toast(`Aporte registrado para ${contributorName}.`, 'success');
 }
 
 async function saveProject(event) {
@@ -1580,10 +1520,7 @@ export function bindProjectsEvents() {
     openProjectHistoryModal(getSelectedProject()?.id),
   );
   document.getElementById("add-project-contribution-btn")?.addEventListener("click", () =>
-    openContributionModal(getSelectedProject()?.id, "add"),
-  );
-  document.getElementById("remove-project-contribution-btn")?.addEventListener("click", () =>
-    openContributionModal(getSelectedProject()?.id, "remove"),
+    openContributionModal(getSelectedProject()?.id),
   );
   document.getElementById("project-participant-form")?.addEventListener("submit", saveParticipant);
 

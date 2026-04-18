@@ -17,6 +17,8 @@ import {
   validateNonNegative,
 } from '../utils/validators.js';
 import { getCurrentUser } from './onboarding.js';
+import { renderMetricCard, renderInlineEmpty } from '../services/render-helpers.js';
+import { renderActionButton, renderActionGroup, renderInfoTiles, renderSectionIntro } from '../services/ui-fragments.js';
 
 const INVESTMENT_KINDS = {
   broker: 'broker_account',
@@ -104,24 +106,20 @@ export function renderInvestments() {
 
     <section class="grid gap-5 mb-6">
       <div class="card p-4 md:p-5">
-        <div class="section-head section-head-spaced items-start gap-4">
-          <div>
-            <h2 class="section-title">Corretoras / contas de investimento</h2>
-            <p class="text-sm text-slate-500">Caixa e patrimônio agrupados por instituição.</p>
-          </div>
-        </div>
+        ${renderSectionIntro({
+          title: 'Corretoras / contas de investimento',
+          text: 'Caixa e patrimônio agrupados por instituição.',
+        })}
         <div class="grid gap-4 mt-4">
           ${model.brokers.length ? model.brokers.map((broker) => renderBrokerCard(broker, model)).join('') : emptyState('Nenhuma corretora cadastrada', 'Crie uma corretora para separar seus investimentos.')}
         </div>
       </div>
 
       <div class="card p-4 md:p-5">
-        <div class="section-head section-head-spaced items-start gap-4">
-          <div>
-            <h2 class="section-title">Distribuição</h2>
-            <p class="text-sm text-slate-500">Por tipo de ativo e corretora.</p>
-          </div>
-        </div>
+        ${renderSectionIntro({
+          title: 'Distribuição',
+          text: 'Por tipo de ativo e corretora.',
+        })}
         <div class="mt-4 space-y-3">
           ${model.distributionByType.length ? model.distributionByType.map((item) => distributionLine(item.label, item.value, model.totals.currentValue)).join('') : emptyInline('Sem posições para calcular distribuição.')}
         </div>
@@ -129,13 +127,11 @@ export function renderInvestments() {
     </section>
 
     <section class="card p-4 md:p-5 mb-6">
-      <div class="section-head section-head-spaced items-start gap-4">
-        <div>
-          <h2 class="section-title">Posições</h2>
-          <p class="text-sm text-slate-500">Quantidade, preço médio, custo, valor atual e proventos por ativo.</p>
-        </div>
-        <span class="badge badge-muted">${filteredPositions.length} posição(ões)</span>
-      </div>
+      ${renderSectionIntro({
+        title: 'Posições',
+        text: 'Quantidade, preço médio, custo, valor atual e proventos por ativo.',
+        badge: `${filteredPositions.length} posição(ões)`,
+      })}
       <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3 mt-4">
         ${filteredPositions.length ? filteredPositions.map((position) => renderPositionCard(position, model)).join('') : emptyState('Nenhuma posição encontrada', 'Cadastre uma posição inicial ou registre uma compra de ativo.')}
       </div>
@@ -143,24 +139,20 @@ export function renderInvestments() {
 
     <section class="grid gap-5 xl:grid-cols-[1fr_1fr] mb-6">
       <div class="card p-4 md:p-5">
-        <div class="section-head section-head-spaced items-start gap-4">
-          <div>
-            <h2 class="section-title">Planejamento de alocação</h2>
-            <p class="text-sm text-slate-500">Compare percentual atual com a alocação alvo definida por você.</p>
-          </div>
-        </div>
+        ${renderSectionIntro({
+          title: 'Planejamento de alocação',
+          text: 'Compare percentual atual com a alocação alvo definida por você.',
+        })}
         <div class="overflow-x-auto mt-4">
           ${renderAllocationTable(model)}
         </div>
       </div>
 
       <div class="card p-4 md:p-5">
-        <div class="section-head section-head-spaced items-start gap-4">
-          <div>
-            <h2 class="section-title">Histórico recente</h2>
-            <p class="text-sm text-slate-500">Movimentações com origem, destino e usuário responsável.</p>
-          </div>
-        </div>
+        ${renderSectionIntro({
+          title: 'Histórico recente',
+          text: 'Movimentações com origem, destino e usuário responsável.',
+        })}
         <div class="mt-4">
           ${filteredMovements.length ? filteredMovements.map((movement) => renderMovementLine(movement, model)).join('') : emptyInline('Nenhuma movimentação registrada.')}
         </div>
@@ -456,19 +448,39 @@ function renderBrokerCard(broker, model) {
           </div>
         </div>
 
-        <div class="grid gap-3 sm:grid-cols-3">
-          ${brokerInfoBlock('Patrimônio', currency(value))}
-          ${brokerInfoBlock('Caixa', currency(cash))}
-          ${brokerInfoBlock('Total na corretora', currency(total))}
-          ${brokerInfoBlock('Custo base', currency(cost))}
-          ${brokerInfoBlock('Resultado', currency(result), result >= 0 ? 'text-emerald-600' : 'text-rose-600')}
-          ${brokerInfoBlock('Principais ativos', topPositions.length ? topPositions.map((item) => item.ticker || item.name).join(', ') : 'Sem ativos')}
-        </div>
+        ${renderInfoTiles(
+          [
+            { label: 'Patrimônio', value: currency(value) },
+            { label: 'Caixa', value: currency(cash) },
+            { label: 'Total na corretora', value: currency(total) },
+            { label: 'Custo base', value: currency(cost) },
+            { label: 'Resultado', value: currency(result), valueClassName: `text-lg font-black tracking-[-0.04em] ${result >= 0 ? 'text-emerald-600' : 'text-rose-600'} break-words` },
+            { label: 'Principais ativos', value: topPositions.length ? topPositions.map((item) => item.ticker || item.name).join(', ') : 'Sem ativos' },
+          ],
+          {
+            gridClassName: 'grid gap-3 sm:grid-cols-3',
+            tileClassName: 'rounded-[22px] border border-slate-200 bg-slate-50/70 p-4 min-w-0',
+            labelClassName: 'text-xs uppercase tracking-[0.16em] text-slate-400 font-semibold',
+            valueClassName: 'mt-2 text-lg font-black tracking-[-0.04em] text-slate-950 break-words',
+          },
+        )}
 
-        <div class="flex gap-2 lg:flex-col lg:items-stretch ${disabledActions}">
-          <button class="action-btn justify-center" data-broker-edit="${broker.id}">Editar</button>
-          <button class="danger-btn justify-center" data-broker-delete="${broker.id}">Excluir</button>
-        </div>
+        ${renderActionGroup(
+          [
+            renderActionButton({
+              label: 'Editar',
+              attrs: `data-broker-edit="${broker.id}"`,
+              className: 'justify-center',
+            }),
+            renderActionButton({
+              label: 'Excluir',
+              tone: 'danger',
+              attrs: `data-broker-delete="${broker.id}"`,
+              className: 'justify-center',
+            }),
+          ],
+          { className: `flex gap-2 lg:flex-col lg:items-stretch ${disabledActions}` },
+        )}
       </div>
     </article>
   `;
@@ -488,32 +500,41 @@ function renderPositionCard(position, model) {
         </div>
         <span class="badge ${profit >= 0 ? 'badge-success' : 'badge-danger'}">${percent(profitability)}</span>
       </div>
-      <div class="grid grid-cols-2 gap-4 mt-5 text-sm">
-        <div>
-          <div class="text-slate-400">Quantidade</div>
-          <div class="font-bold text-slate-950">${formatQuantity(position.quantity)}</div>
-        </div>
-        <div>
-          <div class="text-slate-400">Preço médio</div>
-          <div class="font-bold text-slate-950">${currency(position.averagePrice)}</div>
-        </div>
-        <div>
-          <div class="text-slate-400">Custo</div>
-          <div class="font-bold text-slate-950">${currency(position.amountInvested)}</div>
-        </div>
-        <div>
-          <div class="text-slate-400">Valor atual</div>
-          <div class="font-bold text-slate-950">${currency(position.currentValue)}</div>
-        </div>
-      </div>
+      ${renderInfoTiles(
+        [
+          { label: 'Quantidade', value: formatQuantity(position.quantity) },
+          { label: 'Preço médio', value: currency(position.averagePrice) },
+          { label: 'Custo', value: currency(position.amountInvested) },
+          { label: 'Valor atual', value: currency(position.currentValue) },
+        ],
+        {
+          gridClassName: 'grid grid-cols-2 gap-4 mt-5 text-sm',
+          tileClassName: '',
+          labelClassName: 'text-slate-400',
+          valueClassName: 'font-bold text-slate-950',
+        },
+      )}
       <div class="rounded-2xl bg-slate-50 p-3 mt-5 text-sm text-slate-600">
         Proventos/rendimentos: <strong>${currency(position.receivedProceeds)}</strong>
       </div>
-      <div class="flex items-center gap-2 mt-5 flex-wrap">
-        <button class="action-btn" data-investment-edit="${position.id}">Editar</button>
-        <button class="action-btn" data-movement-edit="new:${position.id}">Movimentar</button>
-        <button class="danger-btn" data-investment-delete="${position.id}">Excluir</button>
-      </div>
+      ${renderActionGroup(
+        [
+          renderActionButton({
+            label: 'Editar',
+            attrs: `data-investment-edit="${position.id}"`,
+          }),
+          renderActionButton({
+            label: 'Movimentar',
+            attrs: `data-movement-edit="new:${position.id}"`,
+          }),
+          renderActionButton({
+            label: 'Excluir',
+            tone: 'danger',
+            attrs: `data-investment-delete="${position.id}"`,
+          }),
+        ],
+        { className: 'flex items-center gap-2 mt-5 flex-wrap' },
+      )}
     </article>
   `;
 }
@@ -581,10 +602,20 @@ function renderMovementLine(movement, model) {
         <div class="text-right">
           <div class="font-black text-slate-950">${currency(movement.amount)}</div>
           ${movement.quantity ? `<div class="text-xs text-slate-400">Qtd. ${formatQuantity(movement.quantity)}</div>` : ''}
-          <div class="flex items-center gap-2 justify-end mt-2">
-            <button class="action-btn" data-movement-edit="${movement.id}">Editar</button>
-            <button class="danger-btn" data-movement-delete="${movement.id}">Excluir</button>
-          </div>
+          ${renderActionGroup(
+            [
+              renderActionButton({
+                label: 'Editar',
+                attrs: `data-movement-edit="${movement.id}"`,
+              }),
+              renderActionButton({
+                label: 'Excluir',
+                tone: 'danger',
+                attrs: `data-movement-delete="${movement.id}"`,
+              }),
+            ],
+            { className: 'flex items-center gap-2 justify-end mt-2' },
+          )}
         </div>
       </div>
     </div>
@@ -1251,15 +1282,12 @@ async function putAndSync(storeName, record) {
 }
 
 function metricCard(label, value, icon) {
-  return `
-    <article class="card p-5 md:p-6 compact-stat-card min-h-[150px] overflow-hidden">
-      <div class="compact-stat-icon"><i class="fa-solid ${icon}"></i></div>
-      <div class="min-w-0">
-        <div class="compact-stat-label">${label}</div>
-        <div class="compact-stat-value text-[clamp(1.55rem,3vw,2.35rem)] leading-[0.95] break-words">${value}</div>
-      </div>
-    </article>
-  `;
+  return renderMetricCard(label, value, icon, {
+    articleClassName: 'card p-5 md:p-6 compact-stat-card min-h-[150px] overflow-hidden',
+    labelClassName: 'compact-stat-label',
+    valueClassName: 'compact-stat-value text-[clamp(1.55rem,3vw,2.35rem)] leading-[0.95] break-words',
+    iconClassName: 'compact-stat-icon',
+  });
 }
 
 function brokerInfoBlock(label, value, valueClass = 'text-slate-950') {
@@ -1296,7 +1324,7 @@ function emptyState(title, text) {
 }
 
 function emptyInline(text) {
-  return `<div class="empty-state-inline">${text}</div>`;
+  return renderInlineEmpty(text, { className: 'empty-state-inline' });
 }
 
 function brokerOptions(brokers = [], selectedId = '') {
