@@ -1,4 +1,4 @@
-import { state, loadState } from "../state.js";
+import { state, loadState, getDerivedAccounts } from "../state.js";
 import {
   pageHeader,
   openModal,
@@ -86,6 +86,49 @@ function getVisibleGoals() {
   return state.data.goals.filter((item) => !item.isDeleted);
 }
 
+function getTransferableAccounts() {
+  return getDerivedAccounts().filter((account) => !account.isDeleted);
+}
+
+function renderTransferAccountOptions(selectedId = "") {
+  const accounts = getTransferableAccounts();
+  return `
+    <option value="">Não movimentar conta</option>
+    ${accounts
+      .map(
+        (account) => `<option value="${account.id}" ${selectedId === account.id ? "selected" : ""}>${account.name} • ${currency(Number(account.derivedBalance || 0))}</option>`,
+      )
+      .join("")}
+  `;
+}
+
+async function createGoalLinkedAccountAdjustment(goal, amount, bankAccountId, mode, date, notes = "") {
+  if (!bankAccountId) return null;
+
+  const record = {
+    id: createId("tx"),
+    description: `${mode === "remove" ? "[Meta] Resgate" : "[Meta] Aporte"} • ${goal.name}`,
+    type: "adjustment",
+    accountId: bankAccountId,
+    amount: mode === "remove" ? Number(amount || 0) : -Number(amount || 0),
+    date: date || formatDateInput(),
+    category: "Meta",
+    notes: notes || `${mode === "remove" ? "Resgate" : "Aporte"} vinculado à meta ${goal.name}`,
+    relatedEntityType: "goal",
+    relatedEntityId: goal.id,
+    relatedMovementKind: mode === "remove" ? "goal_withdrawal" : "goal_contribution",
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    version: 1,
+    syncStatus: "pending",
+    isDeleted: false,
+  };
+
+  await putOne("transactions", record);
+  await enqueueSync("transactions", record.id);
+  return record;
+}
+
 function getGoalActivity(goalId) {
   return state.data.auditLogs
     .filter(
@@ -119,6 +162,12 @@ function buildGoalActivityLabel(log) {
       return `${actor} compartilhou com ${log.relatedUserName || log.newValue || "um usuário"}.`;
     case "goal_share_removed":
       return `${actor} removeu ${log.relatedUserName || log.previousValue || "um usuário"} do compartilhamento.`;
+    case "goal_contribution_added":
+      return `${actor} adicionou ${currency(Number(log.newValue || 0))} à meta.`;
+    case "goal_contribution_removed":
+      return `${actor} removeu ${currency(Number(log.newValue || 0))} da meta.`;
+    case "goal_account_transfer_linked":
+      return `${actor} vinculou uma movimentação com a conta ${log.relatedUserName || log.newValue || "selecionada"}.`;
     case "goal_updated":
       return `${actor} alterou ${fieldLabel} de ${formatActivityValue(log.previousValue)} para ${formatActivityValue(log.newValue)}.`;
     default:
@@ -248,6 +297,16 @@ export function bindGoalsEvents() {
     .forEach((button) =>
       button.addEventListener("click", () => openGoalHistoryModal(button.dataset.goalHistory)),
     );
+  document
+    .querySelectorAll("[data-goal-contribute]")
+    .forEach((button) =>
+      button.addEventListener("click", () => openGoalContributionModal(button.dataset.goalContribute, "add")),
+    );
+  document
+    .querySelectorAll("[data-goal-withdraw]")
+    .forEach((button) =>
+      button.addEventListener("click", () => openGoalContributionModal(button.dataset.goalWithdraw, "remove")),
+    );
 }
 
 function renderGoalCard(goal) {
@@ -287,6 +346,8 @@ function renderGoalCard(goal) {
         ${renderGoalActivityPreview(goal.id)}
       </div>
       <div class="mt-5 flex gap-3 flex-wrap">
+        ${canEdit ? `<button class="action-btn action-btn-primary" data-goal-contribute="${goal.id}">Adicionar valor</button>` : ""}
+        ${canEdit ? `<button class="action-btn action-btn-danger-soft" data-goal-withdraw="${goal.id}">Remover valor</button>` : ""}
         ${canEdit ? `<button class="action-btn" data-goal-edit="${goal.id}">Editar</button>` : ""}
         <button class="action-btn" data-goal-history="${goal.id}">Atividade</button>
         ${canOwnerManage ? `<button class="action-btn" data-goal-share="${goal.id}">Compartilhar</button>` : ""}
@@ -538,6 +599,161 @@ async function openGoalHistoryModal(goalId) {
     </div>
   `);
   document.getElementById("close-modal")?.addEventListener("click", closeModal);
+}
+
+
+async function openGoalContributionModal(goalId, mode = "add") {
+  const goal = await getOne("goals", goalId);
+  if (!goal) return;
+
+  if (!canEditGoal(goal)) {
+    toast("Você não tem permissão para movimentar essa meta.", "error");
+    return;
+  }
+
+  const isRemove = mode === "remove";
+  const title = isRemove ? "Remover valor" : "Adicionar valor";
+  const helper = isRemove
+    ? "Registre uma retirada manual dessa meta/reserva."
+    : "Registre um aporte manual para esta meta/reserva.";
+
+  openModal(`
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <div class="text-2xl font-bold">${title}</div>
+        <div class="text-sm text-slate-500 mt-1">${helper}</div>
+      </div>
+      <button id="close-modal" class="action-btn">Fechar</button>
+    </div>
+    <form id="goal-contribution-form" class="grid gap-4">
+      <input type="hidden" name="goalId" value="${goal.id}" />
+      <input type="hidden" name="mode" value="${mode}" />
+      <div class="surface-soft rounded-[22px] p-4 border border-slate-100">
+        <div class="text-xs uppercase tracking-[0.14em] text-slate-400">Meta</div>
+        <div class="text-xl font-bold text-slate-900 mt-2">${goal.name}</div>
+        <div class="text-sm text-slate-500 mt-2">Atual: ${currency(Number(goal.currentAmount || 0))} de ${currency(Number(goal.targetAmount || 0))}</div>
+      </div>
+      <div>
+        <label class="text-sm font-semibold mb-2 block">Valor da ${isRemove ? "retirada" : "movimentação"}</label>
+        <input name="amount" type="number" min="0.01" step="0.01" class="field" placeholder="0,00" required />
+      </div>
+      <div class="grid md:grid-cols-2 gap-4">
+        <div>
+          <label class="text-sm font-semibold mb-2 block">Data</label>
+          <input name="date" type="date" class="field" value="${formatDateInput()}" required />
+        </div>
+        <div>
+          <label class="text-sm font-semibold mb-2 block">${isRemove ? "Conta para receber" : "Conta de origem"}</label>
+          <select name="bankAccountId" class="select">${renderTransferAccountOptions("")}</select>
+          <div class="text-xs text-slate-500 mt-2">${isRemove ? "Opcional: credita o valor resgatado em uma conta." : "Opcional: debita o aporte de uma conta do app."}</div>
+        </div>
+      </div>
+      <div>
+        <label class="text-sm font-semibold mb-2 block">Observação</label>
+        <textarea name="notes" class="textarea" rows="3" placeholder="Ex.: resgate da reserva, uso parcial, aporte mensal..."></textarea>
+      </div>
+      <div class="flex justify-end gap-3 pt-2 flex-wrap">
+        <button type="button" id="cancel-goal-contribution" class="action-btn">Cancelar</button>
+        <button class="action-btn ${isRemove ? "action-btn-danger-soft" : "action-btn-primary"}" type="submit">${isRemove ? "Salvar retirada" : "Salvar aporte"}</button>
+      </div>
+    </form>
+  `);
+
+  document.getElementById("close-modal")?.addEventListener("click", closeModal);
+  document.getElementById("cancel-goal-contribution")?.addEventListener("click", closeModal);
+  document
+    .getElementById("goal-contribution-form")
+    ?.addEventListener("submit", saveGoalContribution);
+}
+
+async function saveGoalContribution(event) {
+  event.preventDefault();
+  try {
+    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+    validatePositive(payload.amount, "Valor da movimentação");
+    validateRequired(payload.date, "Data");
+
+    const goal = await getOne("goals", payload.goalId);
+    if (!goal) throw new Error("Meta não encontrada.");
+    if (!canEditGoal(goal)) {
+      throw new Error("Você não tem permissão para movimentar essa meta.");
+    }
+
+    const isRemove = payload.mode === "remove";
+    const amount = Number(payload.amount || 0);
+    const timestamp = nowIso();
+    const currentAmount = Number(goal.currentAmount || 0);
+
+    if (isRemove && amount > currentAmount) {
+      throw new Error("Não é possível remover mais do que o valor acumulado na meta.");
+    }
+
+    const nextAmount = isRemove ? currentAmount - amount : currentAmount + amount;
+    const updated = {
+      ...goal,
+      currentAmount: nextAmount,
+      lastContribution: isRemove ? -amount : amount,
+      notes: goal.notes || "",
+      updatedAt: timestamp,
+      version: (goal.version || 0) + 1,
+      syncStatus: "pending",
+    };
+
+    await putOne("goals", updated);
+    await enqueueSync("goals", updated.id);
+
+    const linkedTransaction = await createGoalLinkedAccountAdjustment(
+      updated,
+      amount,
+      payload.bankAccountId || "",
+      payload.mode,
+      payload.date,
+      payload.notes || "",
+    );
+
+    await createGoalAuditLog(updated, isRemove ? "goal_contribution_removed" : "goal_contribution_added", {
+      field: "currentAmount",
+      fieldLabel: isRemove ? "Retirada" : "Aporte",
+      previousValue: currentAmount,
+      newValue: amount,
+    });
+
+    if (payload.bankAccountId) {
+      const linkedAccount = getTransferableAccounts().find((account) => account.id === payload.bankAccountId);
+      await createGoalAuditLog(updated, "goal_account_transfer_linked", {
+        field: "bankAccountId",
+        fieldLabel: isRemove ? "Conta de destino" : "Conta de origem",
+        previousValue: null,
+        newValue: linkedAccount?.name || payload.bankAccountId,
+        relatedUserId: linkedAccount?.id || null,
+        relatedUserName: linkedAccount?.name || "",
+      });
+    }
+
+    if (payload.notes) {
+      await createGoalAuditLog(updated, "goal_updated", {
+        field: isRemove ? "withdrawNote" : "contributionNote",
+        fieldLabel: isRemove ? "Observação da retirada" : "Observação do aporte",
+        previousValue: null,
+        newValue: payload.notes,
+      });
+    }
+
+    await loadState();
+    closeModal();
+    toast(
+      linkedTransaction
+        ? isRemove
+          ? "Valor removido da meta e creditado na conta."
+          : "Valor adicionado à meta e debitado da conta."
+        : isRemove
+          ? "Valor removido da meta com sucesso."
+          : "Valor adicionado à meta com sucesso.",
+      "success",
+    );
+  } catch (error) {
+    toast(error.message, "error");
+  }
 }
 
 function confirmGoalDelete(goalId) {

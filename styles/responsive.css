@@ -1,0 +1,804 @@
+/* UltimatePlanner Responsive Safety Layer
+   Additive CSS only. Loaded after main.css and components.css.
+   Goal: improve responsiveness without changing business logic or UI identity. */
+
+:root {
+  --safe-page-x: clamp(10px, 2.5vw, 20px);
+  --safe-card-radius: clamp(20px, 4vw, 30px);
+}
+
+html {
+  width: 100%;
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  width: 100%;
+  overflow-x: hidden;
+}
+
+img,
+svg,
+canvas,
+video {
+  max-width: 100%;
+}
+
+button,
+input,
+select,
+textarea {
+  max-width: 100%;
+}
+
+#app-shell,
+.main-shell,
+.app-main,
+#view-root,
+.card,
+.glass-panel,
+.modal-panel,
+.premium-modal-panel,
+.mobile-drawer-panel,
+.search-shell,
+.page-header,
+.section-head,
+.section-head-spaced {
+  min-width: 0;
+}
+
+.card,
+.glass-panel,
+.surface-soft,
+.module-overview-card,
+.compact-stat-card,
+.account-showcase-card,
+.premium-card-shell,
+.project-card {
+  overflow-wrap: anywhere;
+}
+
+.page-title,
+.section-title,
+.compact-stat-value,
+.module-overview-value,
+.dashboard-hero-value,
+.confirm-title,
+.premium-modal-title {
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.page-subtitle,
+.card p,
+.record-line,
+.empty-state-inline,
+.toast-message {
+  overflow-wrap: anywhere;
+}
+
+/* Tabelas: preserva conteúdo e permite rolagem horizontal quando necessário. */
+.card:has(.data-table),
+.surface-soft:has(.data-table),
+.table-responsive,
+.overflow-table {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.data-table {
+  min-width: 680px;
+}
+
+.data-table th,
+.data-table td {
+  vertical-align: top;
+}
+
+/* Controles e filtros não devem estourar em telas pequenas. */
+.page-header > *,
+.section-head > *,
+.section-head-spaced > *,
+.topbar > *,
+.search-shell,
+.action-btn,
+.field,
+.select,
+.textarea,
+.month-field {
+  min-width: 0;
+}
+
+.action-btn,
+.table-action,
+.badge {
+  white-space: normal;
+}
+
+/* Grids principais: mantêm até 3 colunas no desktop, 2 no tablet, 1 no mobile. */
+.account-grid,
+.module-card-grid,
+.module-overview-grid-3,
+.module-overview-grid-4,
+.dashboard-side-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.module-overview-grid-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* Cards gerados por módulos novos/antigos com Tailwind utilitário. */
+.module-stack > .grid,
+.card > .grid,
+section > .grid,
+article > .grid {
+  min-width: 0;
+}
+
+/* Modais ficam utilizáveis em qualquer altura. */
+.modal-backdrop {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.modal-panel,
+.premium-modal-panel {
+  max-width: min(920px, calc(100vw - 24px));
+  max-height: min(92dvh, 920px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.modal-panel form,
+.premium-modal-panel form {
+  min-width: 0;
+}
+
+/* Drawer e navegação mobile não cobrem conteúdo nem estouram no safe-area. */
+.mobile-drawer-panel {
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+}
+
+.mobile-nav {
+  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+}
+
+/* Breakpoint grande/tablet. */
+@media (max-width: 1279px) {
+  #app-shell {
+    grid-template-columns: 1fr !important;
+    padding: 16px;
+  }
+
+  .sidebar {
+    display: none !important;
+  }
+
+  .topbar {
+    top: 12px;
+    margin-bottom: 20px;
+  }
+
+  .account-grid,
+  .module-card-grid,
+  .module-overview-grid-3,
+  .module-overview-grid-4,
+  .dashboard-side-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .dashboard-shell-balanced,
+  .dashboard-hero-grid-safe,
+  .module-overview-grid,
+  .split-list {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 1023px) {
+  #app-shell {
+    padding: 14px;
+  }
+
+  .app-main {
+    padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .topbar {
+    position: sticky;
+    top: 10px;
+    border-radius: 24px;
+    min-height: auto;
+  }
+
+  .topbar .search-shell {
+    flex: 1 1 100%;
+  }
+
+  .topbar .mini-stat {
+    flex: 1 1 min(170px, 100%);
+    min-width: 0;
+  }
+
+  .page-header,
+  .section-head,
+  .section-head-spaced {
+    gap: 14px;
+  }
+
+  .dashboard-hero,
+  .chart-panel,
+  .list-panel,
+  .section-stack,
+  .module-overview-card,
+  .account-showcase-card,
+  .compact-stat-card,
+  .card {
+    border-radius: var(--safe-card-radius);
+  }
+
+  .modal-panel,
+  .premium-modal-panel {
+    width: calc(100vw - 24px);
+  }
+}
+
+@media (max-width: 767px) {
+  #app-shell {
+    padding: 10px;
+  }
+
+  .topbar {
+    top: 8px;
+    margin-bottom: 16px;
+    padding: 12px !important;
+  }
+
+  .page-header,
+  .section-head,
+  .section-head-spaced,
+  .premium-modal-head,
+  .confirm-hero {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  .page-title {
+    font-size: clamp(1.45rem, 7vw, 1.85rem);
+    line-height: 1.08;
+  }
+
+  .page-subtitle,
+  .whitespace-nowrap,
+  [class*="whitespace-nowrap"] {
+    white-space: normal !important;
+  }
+
+  .dashboard-hero-value,
+  .compact-stat-value,
+  .module-overview-value,
+  .premium-modal-title,
+  .confirm-title {
+    font-size: clamp(1.55rem, 9vw, 2.45rem) !important;
+    line-height: 1.04;
+    letter-spacing: -0.045em;
+  }
+
+  .account-grid,
+  .module-card-grid,
+  .module-overview-grid,
+  .module-overview-grid-3,
+  .module-overview-grid-4,
+  .dashboard-side-grid,
+  .dashboard-shell-balanced,
+  .dashboard-hero-grid-safe,
+  .split-list,
+  .module-stack > .grid,
+  .card > .grid,
+  section > .grid,
+  article > .grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .grid[class*="grid-cols"],
+  .grid[class*="md:grid-cols"],
+  .grid[class*="lg:grid-cols"],
+  .grid[class*="xl:grid-cols"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  .card,
+  .module-overview-card,
+  .compact-stat-card,
+  .account-showcase-card,
+  .premium-card-shell {
+    border-radius: 22px;
+  }
+
+  .card.p-6,
+  .card.md\:p-6,
+  .module-overview-card,
+  .compact-stat-card,
+  .account-showcase-card {
+    padding: 16px !important;
+  }
+
+  .field,
+  .select,
+  .textarea,
+  .month-field,
+  .action-btn {
+    min-height: 44px;
+  }
+
+  .action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .page-header .action-btn,
+  .section-head .action-btn,
+  .section-head-spaced .action-btn,
+  .confirm-actions .action-btn {
+    width: 100%;
+  }
+
+  .record-line {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .data-table {
+    min-width: 620px;
+    font-size: 0.9rem;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 12px;
+  }
+
+  .modal-backdrop {
+    padding: 10px;
+    align-items: flex-start;
+  }
+
+  .modal-panel,
+  .premium-modal-panel {
+    width: 100%;
+    max-width: 100%;
+    max-height: none;
+    min-height: calc(100dvh - 20px);
+    border-radius: 24px;
+    padding: 16px !important;
+  }
+
+  .toast-root {
+    left: 10px;
+    right: 10px;
+    bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .toast {
+    width: 100%;
+    min-width: 0 !important;
+    max-width: none !important;
+  }
+
+  .toast-shell {
+    padding: 14px;
+  }
+
+  .toast-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 15px;
+  }
+
+  .mobile-drawer-panel {
+    left: 8px !important;
+    right: 8px !important;
+    bottom: 8px !important;
+    border-radius: 24px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  #app-shell {
+    padding: 8px;
+  }
+
+  .topbar {
+    border-radius: 20px;
+  }
+
+  .search-shell {
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .page-title {
+    font-size: clamp(1.35rem, 8vw, 1.65rem);
+  }
+
+  .badge,
+  .table-action,
+  .action-btn {
+    font-size: 0.88rem;
+  }
+
+  .compact-stat-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 15px;
+  }
+
+  .data-table {
+    min-width: 560px;
+  }
+}
+
+@media (max-width: 380px) {
+  .drawer-nav-btn {
+    font-size: 0.82rem;
+  }
+
+  .card.p-5,
+  .card.p-6,
+  .module-overview-card,
+  .compact-stat-card {
+    padding: 14px !important;
+  }
+}
+
+/* Remove a navegação inferior mobile redundante.
+   O acesso mobile fica concentrado no botão de menu/drawer. */
+.mobile-nav {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+@media (max-width: 1023px) {
+  .app-main {
+    padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+}
+
+/* Correção da topbar intermediária.
+   Quando a sidebar some, o botão de menu precisa aparecer.
+   Também evita os cards de Perfil/Sync/Apps Script ficarem espremidos na faixa de tablet/notebook pequeno. */
+@media (max-width: 1279px) {
+  #mobile-menu-btn {
+    display: inline-flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    flex: 0 0 44px !important;
+  }
+
+  #topbar > .h-full.flex {
+    width: 100%;
+    display: flex !important;
+    align-items: center !important;
+    flex-wrap: nowrap !important;
+    gap: 12px !important;
+  }
+
+  #topbar .search-shell {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+  }
+
+  #topbar .topbar-month-filter {
+    flex: 0 0 160px !important;
+    width: 160px !important;
+    max-width: 160px !important;
+    min-width: 150px !important;
+  }
+
+  #topbar .topbar-month-filter .month-field,
+  #global-month-picker {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  #topbar .mini-stat,
+  #topbar .hidden.md\:flex {
+    display: none !important;
+  }
+}
+
+@media (min-width: 1280px) {
+  #mobile-menu-btn {
+    display: none !important;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 960px) {
+  #topbar {
+    overflow: hidden !important;
+  }
+
+  #topbar > .h-full.flex {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  #topbar .search-shell {
+    min-height: 50px !important;
+  }
+
+  #topbar .search-shell input {
+    min-width: 0 !important;
+    text-overflow: ellipsis !important;
+  }
+
+  #topbar .topbar-month-filter {
+    flex-basis: 150px !important;
+    width: 150px !important;
+    max-width: 150px !important;
+    padding-left: 14px !important;
+    padding-right: 14px !important;
+  }
+}
+
+@media (max-width: 767px) {
+  #topbar > .h-full.flex {
+    display: flex !important;
+    align-items: center !important;
+    flex-wrap: nowrap !important;
+    gap: 10px !important;
+  }
+
+  #mobile-menu-btn {
+    flex: 0 0 44px !important;
+  }
+
+  #topbar .search-shell {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+  }
+
+  #topbar .topbar-month-filter {
+    display: none !important;
+  }
+}
+
+/* Correção do drawer entre 1024px e 1279px.
+   O ui.js injeta uma regra runtime que esconde #mobile-drawer acima de 1024px.
+   Como a sidebar só volta em 1280px, essa faixa ficava com botão de menu visível,
+   mas o drawer continuava escondido. */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  html body #mobile-menu-btn {
+    display: inline-flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    position: relative !important;
+    z-index: 20 !important;
+  }
+
+  html body #mobile-drawer.mobile-drawer.is-open {
+    display: block !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+    opacity: 1 !important;
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 9999 !important;
+  }
+
+  html body #mobile-drawer.mobile-drawer.is-open .mobile-drawer-backdrop {
+    display: block !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  }
+
+  html body #mobile-drawer.mobile-drawer.is-open .mobile-drawer-panel {
+    display: block !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    transform: translateY(0) !important;
+    left: 16px !important;
+    right: 16px !important;
+    bottom: 16px !important;
+    max-height: calc(100dvh - 32px) !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  html body.drawer-open {
+    overflow: hidden !important;
+  }
+}
+
+/* A navegação inferior continua removida; a navegação mobile fica somente no drawer. */
+html body .mobile-nav {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Correção dos modais com altura automática.
+   Remove o scroll interno artificial do modal quando o conteúdo cabe na tela.
+   Em telas muito pequenas, o scroll fica apenas como proteção de acessibilidade. */
+@media (min-width: 768px) {
+  html body .modal-backdrop,
+  html body .premium-modal-backdrop {
+    overflow: visible !important;
+    align-items: center !important;
+  }
+
+  html body .modal-panel,
+  html body .premium-modal-panel {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  html body .modal-panel form,
+  html body .premium-modal-panel form {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+}
+
+@media (max-width: 767px) {
+  html body .modal-backdrop,
+  html body .premium-modal-backdrop {
+    overflow-y: auto !important;
+    align-items: flex-start !important;
+    padding-top: 12px !important;
+    padding-bottom: 12px !important;
+  }
+
+  html body .modal-panel,
+  html body .premium-modal-panel {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+}
+
+/* Correção global definitiva dos modais sem scroll interno.
+   Regra: o painel do modal cresce conforme o conteúdo.
+   Se o conteúdo for maior que a tela, quem rola é o backdrop/página do modal,
+   nunca uma barra interna grudada no card. */
+html body #modal-root {
+  position: relative;
+  z-index: 9998;
+}
+
+html body #modal-root .modal-backdrop,
+html body #modal-root .premium-modal-backdrop,
+html body .modal-backdrop:has(.modal-panel),
+html body .modal-backdrop:has(.modal-card) {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100dvh !important;
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: center !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain !important;
+  padding: clamp(14px, 4vh, 32px) clamp(10px, 2vw, 24px) !important;
+  box-sizing: border-box !important;
+}
+
+html body #modal-root .modal-panel,
+html body #modal-root .premium-modal-panel,
+html body #modal-root [role="dialog"] {
+  width: min(920px, calc(100vw - 24px)) !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: visible !important;
+  overflow-x: visible !important;
+  overflow-y: visible !important;
+  box-sizing: border-box !important;
+}
+
+html body #modal-root .modal-inner,
+html body #modal-root .modal-card,
+html body #modal-root .confirm-shell,
+html body #modal-root form,
+html body #modal-root fieldset {
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: visible !important;
+  overflow-x: visible !important;
+  overflow-y: visible !important;
+  box-sizing: border-box !important;
+}
+
+html body #modal-root .modal-card {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+html body #modal-root [class*="max-h-"],
+html body #modal-root [class*="overflow-y-auto"],
+html body #modal-root [class*="overflow-auto"] {
+  max-height: none !important;
+  overflow: visible !important;
+  overflow-y: visible !important;
+}
+
+html body #modal-root textarea,
+html body #modal-root select {
+  overflow: auto !important;
+}
+
+html body #modal-root .grid,
+html body #modal-root .flex {
+  min-width: 0 !important;
+}
+
+html body #modal-root .justify-end,
+html body #modal-root .modal-actions,
+html body #modal-root .confirm-actions {
+  flex-wrap: wrap !important;
+}
+
+html body:has(#modal-root .modal-backdrop) {
+  overflow: hidden !important;
+}
+
+@media (min-width: 768px) {
+  html body #modal-root .modal-backdrop,
+  html body #modal-root .premium-modal-backdrop,
+  html body .modal-backdrop:has(.modal-panel),
+  html body .modal-backdrop:has(.modal-card) {
+    align-items: center !important;
+  }
+}
+
+@media (max-height: 760px), (max-width: 767px) {
+  html body #modal-root .modal-backdrop,
+  html body #modal-root .premium-modal-backdrop,
+  html body .modal-backdrop:has(.modal-panel),
+  html body .modal-backdrop:has(.modal-card) {
+    align-items: flex-start !important;
+  }
+}
+
+@media (max-width: 767px) {
+  html body #modal-root .modal-backdrop,
+  html body #modal-root .premium-modal-backdrop,
+  html body .modal-backdrop:has(.modal-panel),
+  html body .modal-backdrop:has(.modal-card) {
+    padding: 10px !important;
+  }
+
+  html body #modal-root .modal-panel,
+  html body #modal-root .premium-modal-panel,
+  html body #modal-root [role="dialog"] {
+    width: 100% !important;
+    max-width: calc(100vw - 20px) !important;
+    border-radius: 24px !important;
+  }
+
+  html body #modal-root .modal-card {
+    width: 100% !important;
+  }
+
+  html body #modal-root .justify-end > button,
+  html body #modal-root .modal-actions > button,
+  html body #modal-root .confirm-actions > button {
+    flex: 1 1 150px !important;
+  }
+}
