@@ -34,6 +34,7 @@ import { renderReports, mountReportCharts } from "./modules/reports.js";
 import { renderSettings, bindSettingsEvents } from "./modules/settings.js";
 import { renderIntegrity, bindIntegrityEvents } from "./modules/integrity.js";
 import { renderSearch, bindSearchEvents } from "./modules/search.js";
+import { renderAdvisor, bindAdvisorEvents } from "./modules/advisor.js";
 import {
   processSyncQueue,
   hasPendingSync,
@@ -63,6 +64,7 @@ const routeMap = {
   settings: renderSettings,
   integrity: renderIntegrity,
   search: renderSearch,
+  advisor: renderAdvisor,
 };
 
 const REMOTE_PULL_INTERVAL_MS = Math.max(APP_CONFIG.syncIntervalMs * 2, 30000);
@@ -106,6 +108,7 @@ function bindViewEvents() {
   bindSettingsEvents();
   bindIntegrityEvents();
   bindSearchEvents();
+  bindAdvisorEvents();
 
   document.getElementById("global-search-input")?.addEventListener(
     "input",

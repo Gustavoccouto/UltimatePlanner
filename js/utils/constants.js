@@ -6,6 +6,7 @@ export const ROUTES = {
   projects: "projects",
   goals: "goals",
   investments: "investments",
+  advisor: "advisor",
   reports: "reports",
   search: "search",
   integrity: "integrity",

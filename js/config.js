@@ -15,6 +15,8 @@ export const APP_CONFIG = {
   defaultAppsScriptUrl: DEFAULT_APPS_SCRIPT_URL,
   jsonpTimeoutMs: 25000,
   syncChunkSize: 900,
+  aiMaxQuestionLength: 600,
+  aiRecentMessages: 6,
 };
 
 export const ENTITY_STORES = [

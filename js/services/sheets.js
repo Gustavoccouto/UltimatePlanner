@@ -99,4 +99,13 @@ export const SheetsService = {
   listUsers() {
     return apiRequest("listUsers", {});
   },
+
+  askFinancialAdvisor({ question, recentMessages, selectedMonth, userName }) {
+    return apiRequest('askFinancialAdvisor', {
+      question,
+      recentMessages,
+      selectedMonth,
+      userName,
+    });
+  },
 };

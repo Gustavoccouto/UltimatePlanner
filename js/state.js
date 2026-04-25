@@ -14,6 +14,8 @@ export const state = {
     offline: !navigator.onLine,
     syncing: false,
     selectedMonth: getCurrentMonthKey(),
+    advisorMessages: [],
+    advisorLoading: false,
   },
   data: {
     accounts: [],

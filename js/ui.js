@@ -11,6 +11,7 @@ const navItems = [
   ['projects', 'fa-briefcase', 'Projetos'],
   ['goals', 'fa-bullseye', 'Metas'],
   ['investments', 'fa-chart-pie', 'Investimentos'],
+  ['advisor', 'fa-comments-dollar', 'Consultor IA'],
   ['reports', 'fa-chart-column', 'Relatórios'],
   ['integrity', 'fa-shield-halved', 'Integridade'],
   ['settings', 'fa-gear', 'Configurações'],
