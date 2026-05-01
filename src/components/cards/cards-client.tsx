@@ -1,0 +1,701 @@
+"use client";
+
+import { CSSProperties, FormEvent, useMemo, useState } from "react";
+import type { Account, Category, CreditCard, Installment, InstallmentPlan, Invoice, Transaction } from "@/lib/domain/app-types";
+import { deriveCreditCardMetrics, buildCardFutureProjection, buildPlanViews, getInstallmentStatusLabel, resolveInstallmentAmounts } from "@/lib/domain/card-ledger";
+import { monthKey, normalizeBillingMonth } from "@/lib/domain/billing";
+import { currencyBRL, datePt, monthInput, monthLabel, todayInput } from "@/lib/domain/formatters";
+import { deriveAccountSummaries } from "@/lib/domain/account-balances";
+import { ColorPickerField } from "@/components/ui/color-picker-field";
+import { CategoryInputField } from "@/components/ui/category-input-field";
+
+type CardForm = {
+  id?: string;
+  name: string;
+  brand: string;
+  limit_amount: string;
+  closing_day: string;
+  due_day: string;
+  account_id: string;
+  color: string;
+  notes: string;
+};
+
+type PurchaseForm = {
+  description: string;
+  credit_card_id: string;
+  category_id: string;
+  category_name: string;
+  amount_mode: "total" | "installment";
+  amount_value: string;
+  installments_count: string;
+  purchase_date: string;
+  notes: string;
+};
+
+type InvoicePaymentForm = {
+  credit_card_id: string;
+  account_id: string;
+  billing_month: string;
+  amount: string;
+  date: string;
+  notes: string;
+};
+
+type InstallmentEditForm = {
+  id: string;
+  description: string;
+  amount: string;
+  due_date: string;
+  billing_month: string;
+  category_id: string;
+  category_name: string;
+  notes: string;
+};
+
+type InstallmentPaymentForm = {
+  id: string;
+  account_id: string;
+  date: string;
+  notes: string;
+};
+
+type ModalKind = "card" | "purchase" | "invoice" | "installment-edit" | "installment-payment" | null;
+
+const emptyCardForm: CardForm = {
+  name: "",
+  brand: "",
+  limit_amount: "0",
+  closing_day: "1",
+  due_day: "10",
+  account_id: "",
+  color: "",
+  notes: ""
+};
+
+const emptyPurchaseForm: PurchaseForm = {
+  description: "",
+  credit_card_id: "",
+  category_id: "",
+  category_name: "",
+  amount_mode: "total",
+  amount_value: "0",
+  installments_count: "1",
+  purchase_date: todayInput(),
+  notes: ""
+};
+
+async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers || {}) }
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "Erro inesperado.");
+  return payload as T;
+}
+
+function accountName(accounts: Account[], id?: string | null) {
+  if (!id) return "—";
+  return accounts.find((account) => account.id === id)?.name || "Conta removida";
+}
+
+function categoryName(categories: Category[], id?: string | null) {
+  if (!id) return "Sem categoria";
+  return categories.find((category) => category.id === id)?.name || "Categoria removida";
+}
+
+function categoryInputValue(categories: Category[], id?: string | null) {
+  if (!id) return "";
+  return categories.find((category) => category.id === id)?.name || "";
+}
+
+function findCategoryIdByName(categories: Category[], name?: string | null) {
+  const normalized = String(name || "").trim().toLowerCase();
+  if (!normalized) return "";
+  return categories.find((category) => category.name.trim().toLowerCase() === normalized)?.id || "";
+}
+
+function accentStyle(color?: string | null) {
+  return color ? ({ "--item-accent": color } as CSSProperties) : undefined;
+}
+
+function notesFrom(metadata: unknown) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return "";
+  const notes = (metadata as Record<string, unknown>).notes;
+  return typeof notes === "string" ? notes : "";
+}
+
+function toCardForm(card: CreditCard): CardForm {
+  return {
+    id: card.id,
+    name: card.name,
+    brand: card.brand || "",
+    limit_amount: String(card.limit_amount || 0),
+    closing_day: String(card.closing_day || 1),
+    due_day: String(card.due_day || 10),
+    account_id: card.account_id || "",
+    color: card.color || "",
+    notes: notesFrom(card.metadata)
+  };
+}
+
+export function CardsClient({
+  initialAccounts,
+  initialCategories,
+  initialCards,
+  initialInvoices,
+  initialPlans,
+  initialInstallments,
+  initialTransactions
+}: {
+  initialAccounts: Account[];
+  initialCategories: Category[];
+  initialCards: CreditCard[];
+  initialInvoices: Invoice[];
+  initialPlans: InstallmentPlan[];
+  initialInstallments: Installment[];
+  initialTransactions: Transaction[];
+}) {
+  const [accounts] = useState<Account[]>(initialAccounts);
+  const [categories, setCategories] = useState<Category[]>(initialCategories);
+  const [cards, setCards] = useState<CreditCard[]>(initialCards);
+  const [invoices, setInvoices] = useState<Invoice[]>(initialInvoices);
+  const [plans, setPlans] = useState<InstallmentPlan[]>(initialPlans);
+  const [installments, setInstallments] = useState<Installment[]>(initialInstallments);
+  const [transactions, setTransactions] = useState<Transaction[]>(initialTransactions);
+  const [selectedMonth, setSelectedMonth] = useState(monthInput());
+  const [expandedPlans, setExpandedPlans] = useState<Set<string>>(new Set());
+  const [modal, setModal] = useState<ModalKind>(null);
+  const [cardForm, setCardForm] = useState<CardForm>(emptyCardForm);
+  const [purchaseForm, setPurchaseForm] = useState<PurchaseForm>(emptyPurchaseForm);
+  const [invoiceForm, setInvoiceForm] = useState<InvoicePaymentForm>({ credit_card_id: "", account_id: "", billing_month: selectedMonth, amount: "0", date: todayInput(), notes: "" });
+  const [installmentEditForm, setInstallmentEditForm] = useState<InstallmentEditForm | null>(null);
+  const [installmentPaymentForm, setInstallmentPaymentForm] = useState<InstallmentPaymentForm | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  const activeCards = cards.filter((card) => !card.is_deleted && !card.is_archived);
+  const activeAccounts = accounts.filter((account) => !account.is_deleted && !account.is_archived);
+  const activeCategories = categories.filter((category) => !category.is_deleted && !category.is_archived && ["expense", "card"].includes(category.type));
+  const accountSummaries = useMemo(() => deriveAccountSummaries(activeAccounts, transactions), [activeAccounts, transactions]);
+  const cardMetrics = useMemo(() => deriveCreditCardMetrics(activeCards, transactions, plans, selectedMonth, invoices), [activeCards, invoices, plans, selectedMonth, transactions]);
+  const planViews = useMemo(() => buildPlanViews(plans, installments, transactions, activeCards), [activeCards, installments, plans, transactions]);
+  const projection = useMemo(() => buildCardFutureProjection(activeCards, transactions, selectedMonth, 4, invoices), [activeCards, invoices, selectedMonth, transactions]);
+  const selectedMonthInvoices = invoices.filter((invoice) => monthKey(invoice.billing_month) === selectedMonth);
+
+  const totals = {
+    limit: cardMetrics.reduce((sum, card) => sum + Number(card.limit_amount || 0), 0),
+    invoice: cardMetrics.reduce((sum, card) => sum + card.current_invoice_amount, 0),
+    open: cardMetrics.reduce((sum, card) => sum + card.open_balance, 0),
+    activeInstallments: planViews.reduce((sum, plan) => sum + plan.remaining_count, 0)
+  };
+
+  const purchasePreview = useMemo(() => {
+    const count = Number(purchaseForm.installments_count || 0);
+    const amount = Number(purchaseForm.amount_value || 0);
+    return resolveInstallmentAmounts(amount, count, purchaseForm.amount_mode);
+  }, [purchaseForm.amount_mode, purchaseForm.amount_value, purchaseForm.installments_count]);
+
+  function openCardModal(card?: CreditCard) {
+    setCardForm(card ? toCardForm(card) : emptyCardForm);
+    setModal("card");
+    setMessage("");
+    setError("");
+  }
+
+  function openPurchaseModal() {
+    if (!activeCards.length) {
+      setError("Cadastre um cartão antes de lançar compras.");
+      return;
+    }
+    setPurchaseForm({ ...emptyPurchaseForm, credit_card_id: activeCards[0]?.id || "", category_id: "", category_name: "" });
+    setModal("purchase");
+    setMessage("");
+    setError("");
+  }
+
+  function openInvoiceModal(cardId?: string) {
+    if (!activeCards.length) {
+      setError("Cadastre um cartão antes de pagar faturas.");
+      return;
+    }
+    if (!activeAccounts.length) {
+      setError("Cadastre uma conta antes de pagar faturas.");
+      return;
+    }
+    const card = cardMetrics.find((item) => item.id === cardId) || cardMetrics.find((item) => item.current_invoice_amount > 0) || cardMetrics[0];
+    setInvoiceForm({
+      credit_card_id: card?.id || "",
+      account_id: activeAccounts[0]?.id || "",
+      billing_month: selectedMonth,
+      amount: String(card?.current_invoice_amount || 0),
+      date: todayInput(),
+      notes: ""
+    });
+    setModal("invoice");
+    setMessage("");
+    setError("");
+  }
+
+  function closeModal() {
+    setModal(null);
+    setLoading(false);
+  }
+
+  async function refreshCardsData() {
+    const [cardsPayload, transactionsPayload, categoriesPayload] = await Promise.all([
+      requestJson<{ data: CreditCard[] }>("/api/cards"),
+      requestJson<{ data: Transaction[] }>("/api/transactions"),
+      requestJson<{ data: Category[] }>("/api/categories")
+    ]);
+    setCards(cardsPayload.data || []);
+    setTransactions(transactionsPayload.data || []);
+    setCategories(categoriesPayload.data || []);
+
+    // Rotas de etapa 2 gravam faturas, planos e parcelas. Para manter a tela consistente sem reload completo,
+    // buscamos diretamente via uma atualização leve da página quando operações afetarem essas tabelas.
+    window.location.reload();
+  }
+
+  async function submitCard(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      const method = cardForm.id ? "PATCH" : "POST";
+      const payload = await requestJson<{ data: CreditCard }>("/api/cards", { method, body: JSON.stringify(cardForm) });
+      setCards((current) => (cardForm.id ? current.map((card) => (card.id === payload.data.id ? payload.data : card)) : [...current, payload.data]));
+      setMessage(cardForm.id ? "Cartão atualizado com sucesso." : "Cartão salvo com sucesso.");
+      closeModal();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Erro ao salvar cartão.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteCard(card: CreditCard) {
+    if (!confirm("O cartão será marcado como excluído. O histórico será mantido para referência.")) return;
+    setError("");
+    try {
+      await requestJson<{ ok: boolean }>("/api/cards", { method: "DELETE", body: JSON.stringify({ id: card.id }) });
+      setCards((current) => current.filter((item) => item.id !== card.id));
+      setMessage("Cartão excluído.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Erro ao excluir cartão.");
+    }
+  }
+
+  async function submitPurchase(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      await requestJson<{ data: unknown }>("/api/cards/purchases", {
+        method: "POST",
+        body: JSON.stringify({
+          ...purchaseForm,
+          category_id: purchaseForm.category_id || findCategoryIdByName(categories, purchaseForm.category_name) || null,
+          category_name: purchaseForm.category_name || null
+        })
+      });
+      setMessage("Compra lançada e parcelamento criado.");
+      closeModal();
+      await refreshCardsData();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Erro ao lançar compra.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitInvoicePayment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const account = accountSummaries.find((item) => item.id === invoiceForm.account_id);
+    const amount = Number(invoiceForm.amount || 0);
+    if (account && account.derived_balance - amount < 0) {
+      const ok = confirm("Esse pagamento pode deixar a conta negativa. Deseja continuar mesmo assim?");
+      if (!ok) return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      await requestJson<{ data: unknown }>("/api/cards/invoice-payments", { method: "POST", body: JSON.stringify(invoiceForm) });
+      setMessage("Pagamento da fatura registrado com sucesso.");
+      closeModal();
+      await refreshCardsData();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Erro ao pagar fatura.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function openInstallmentEdit(transaction: Transaction) {
+    setInstallmentEditForm({
+      id: transaction.id,
+      description: transaction.description,
+      amount: String(transaction.amount || 0),
+      due_date: transaction.date,
+      billing_month: monthKey(transaction.billing_month || transaction.date),
+      category_id: transaction.category_id || "",
+      category_name: categoryInputValue(categories, transaction.category_id),
+      notes: transaction.notes || ""
+    });
+    setModal("installment-edit");
+    setError("");
+    setMessage("");
+  }
+
+  function openInstallmentPayment(transaction: Transaction) {
+    if (!activeAccounts.length) {
+      setError("Cadastre uma conta antes de pagar a parcela.");
+      return;
+    }
+    setInstallmentPaymentForm({ id: transaction.id, account_id: activeAccounts[0]?.id || "", date: todayInput(), notes: "" });
+    setModal("installment-payment");
+    setError("");
+    setMessage("");
+  }
+
+  async function submitInstallmentEdit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!installmentEditForm) return;
+    setLoading(true);
+    setError("");
+    try {
+      await requestJson<{ data: unknown }>("/api/cards/installments", { method: "PATCH", body: JSON.stringify({
+          action: "edit",
+          ...installmentEditForm,
+          category_id: installmentEditForm.category_id || findCategoryIdByName(categories, installmentEditForm.category_name) || null,
+          category_name: installmentEditForm.category_name || null
+        }) });
+      setMessage("Parcela atualizada com sucesso.");
+      closeModal();
+      await refreshCardsData();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Erro ao editar parcela.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitInstallmentPayment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!installmentPaymentForm) return;
+    const transaction = transactions.find((item) => item.id === installmentPaymentForm.id);
+    const account = accountSummaries.find((item) => item.id === installmentPaymentForm.account_id);
+    const amount = Number(transaction?.amount || 0);
+    if (account && account.derived_balance - amount < 0) {
+      const ok = confirm("Esse pagamento pode deixar a conta negativa. Deseja continuar mesmo assim?");
+      if (!ok) return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      await requestJson<{ data: unknown }>("/api/cards/installments", { method: "PATCH", body: JSON.stringify({ action: "pay", ...installmentPaymentForm }) });
+      setMessage("Parcela paga e saída registrada na conta.");
+      closeModal();
+      await refreshCardsData();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Erro ao pagar parcela.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function anticipateInstallment(transaction: Transaction) {
+    const ok = confirm(`Adiantar esta parcela para a fatura de ${monthLabel(selectedMonth)}?`);
+    if (!ok) return;
+    setError("");
+    try {
+      await requestJson<{ data: unknown }>("/api/cards/installments", {
+        method: "PATCH",
+        body: JSON.stringify({ action: "anticipate", id: transaction.id, target_billing_month: selectedMonth, date: todayInput() })
+      });
+      setMessage(`Parcela adiantada para a fatura ${selectedMonth}.`);
+      await refreshCardsData();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Erro ao adiantar parcela.");
+    }
+  }
+
+  async function deleteInstallment(transaction: Transaction) {
+    if (!confirm("Somente esta parcela será removida. Pagamentos individuais vinculados também serão ignorados do histórico ativo.")) return;
+    setError("");
+    try {
+      await requestJson<{ data: unknown }>("/api/cards/installments", { method: "PATCH", body: JSON.stringify({ action: "delete", id: transaction.id }) });
+      setMessage("Parcela excluída.");
+      await refreshCardsData();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Erro ao excluir parcela.");
+    }
+  }
+
+  function togglePlan(planId: string) {
+    setExpandedPlans((current) => {
+      const next = new Set(current);
+      if (next.has(planId)) next.delete(planId);
+      else next.add(planId);
+      return next;
+    });
+  }
+
+  function setAllPlans(open: boolean) {
+    setExpandedPlans(open ? new Set(planViews.map((plan) => plan.id)) : new Set());
+  }
+
+  return (
+    <div className="grid">
+      <header className="page-header">
+        <div>
+          <h1 className="page-title">Cartões</h1>
+          <p className="page-caption">Cartões, faturas, parcelamentos e pagamentos com leitura clara e edição completa.</p>
+        </div>
+        <div className="header-actions">
+          <button className="btn btn-primary" onClick={() => openCardModal()}>Novo cartão</button>
+          <button className="btn btn-muted" onClick={openPurchaseModal}>Nova compra</button>
+          <button className="btn btn-muted" onClick={() => openInvoiceModal()}>Pagar fatura</button>
+        </div>
+      </header>
+
+      {message ? <div className="alert alert-success">{message}</div> : null}
+      {error ? <div className="alert alert-error">{error}</div> : null}
+
+      <section className="filters-panel panel">
+        <div className="field inline-field">
+          <label>Competência da fatura</label>
+          <input type="month" value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)} />
+        </div>
+        <div className="mini-card-grid wide">
+          <div className="mini-card"><span>Limite total</span><strong>{currencyBRL(totals.limit)}</strong></div>
+          <div className="mini-card"><span>Fatura em {monthLabel(selectedMonth)}</span><strong>{currencyBRL(totals.invoice)}</strong></div>
+          <div className="mini-card"><span>Saldo aberto acumulado</span><strong>{currencyBRL(totals.open)}</strong></div>
+          <div className="mini-card"><span>Parcelas pendentes</span><strong>{totals.activeInstallments}</strong></div>
+        </div>
+      </section>
+
+      <section className="cards-grid">
+        {cardMetrics.length ? cardMetrics.map((card) => (
+          <article className="finance-card credit-card accent-card" key={card.id} style={accentStyle(card.color)}>
+            <div className="finance-card-topline">
+              <span className="badge">{card.brand || "Cartão"}</span>
+              <span className="finance-card-bank">Fech. {card.closing_day} • Venc. {card.due_day}</span>
+            </div>
+            <h2 className="finance-card-title">{card.name}</h2>
+            <p className="finance-card-caption">Fatura {monthLabel(selectedMonth)}</p>
+            <p className="finance-card-value">{currencyBRL(card.current_invoice_amount)}</p>
+            <div className="card-meter" aria-hidden="true"><span style={{ width: `${Math.min(100, Math.max(0, (card.used_limit / Number(card.limit_amount || 1)) * 100))}%` }} /></div>
+            <p className="finance-card-caption">Limite disponível: <strong>{currencyBRL(card.available_limit)}</strong></p>
+            <p className="finance-card-caption">Parcelamentos ativos: {card.active_installments_count}</p>
+            <div className="finance-card-actions">
+              <button className="btn btn-muted" onClick={() => openInvoiceModal(card.id)}>Pagar fatura</button>
+              <button className="link-button" onClick={() => openCardModal(card)}>Editar</button>
+              <button className="link-button danger-text" onClick={() => deleteCard(card)}>Excluir</button>
+            </div>
+          </article>
+        )) : <div className="empty-state wide">Nenhum cartão cadastrado. Cadastre um cartão para controlar faturas e parcelamentos.</div>}
+      </section>
+
+      <section className="panel">
+        <div className="section-heading">
+          <div>
+            <h2>Controle</h2>
+            <p>Cartões cadastrados</p>
+          </div>
+        </div>
+        <div className="table-scroll">
+          <table className="table">
+            <thead><tr><th>Cartão</th><th>Limite</th><th>Disponível</th><th>Fechamento</th><th>Vencimento</th><th>Fatura</th><th>Ações</th></tr></thead>
+            <tbody>
+              {cardMetrics.length ? cardMetrics.map((card) => (
+                <tr key={card.id}>
+                  <td><strong>{card.name}</strong><div className="muted-line">{card.brand || "Sem bandeira"}</div></td>
+                  <td>{currencyBRL(card.limit_amount)}</td>
+                  <td>{currencyBRL(card.available_limit)}</td>
+                  <td>Dia {card.closing_day}</td>
+                  <td>Dia {card.due_day}</td>
+                  <td>{currencyBRL(card.current_invoice_amount)}</td>
+                  <td className="table-actions"><button className="link-button" onClick={() => openCardModal(card)}>Editar</button><button className="link-button danger-text" onClick={() => deleteCard(card)}>Excluir</button></td>
+                </tr>
+              )) : <tr><td colSpan={7}>Nenhum cartão cadastrado.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel" id="cards-plans-root">
+        <div className="section-heading">
+          <div>
+            <h2>Parcelamentos</h2>
+            <p>{planViews.length} plano(s) • {totals.activeInstallments} parcela(s) pendente(s)</p>
+          </div>
+          {planViews.length ? <div className="header-actions"><button className="btn btn-muted" onClick={() => setAllPlans(true)}>Expandir tudo</button><button className="btn btn-muted" onClick={() => setAllPlans(false)}>Recolher tudo</button></div> : null}
+        </div>
+        <div className="installment-plan-list">
+          {planViews.length ? planViews.map((plan) => {
+            const isOpen = expandedPlans.has(plan.id);
+            return (
+              <article className={`installment-plan-card ${isOpen ? "is-open" : ""}`} key={plan.id}>
+                <button className="installment-plan-summary" onClick={() => togglePlan(plan.id)} aria-expanded={isOpen}>
+                  <span><strong>{plan.description}</strong><small>{plan.card?.name || "Cartão removido"} • {monthKey(String(plan.first_billing_month || "")) || "—"} até {monthKey(String(plan.last_billing_month || "")) || "—"}</small></span>
+                  <span><strong>{currencyBRL(plan.total_amount)}</strong><small>{plan.remaining_count} pendente(s) • {plan.paid_count} paga(s)</small></span>
+                  <span className="badge">{isOpen ? "Recolher detalhes" : "Ver parcelas"}</span>
+                </button>
+                {isOpen ? (
+                  <div className="table-scroll installment-table-wrap">
+                    <table className="table compact-table">
+                      <thead><tr><th>Parcela</th><th>Fatura</th><th>Data</th><th>Categoria</th><th>Valor</th><th>Status</th><th>Ações</th></tr></thead>
+                      <tbody>
+                        {plan.installments.map((installment) => {
+                          const transaction = installment.transaction;
+                          return (
+                            <tr key={installment.id}>
+                              <td><strong>{installment.description}</strong><div className="muted-line">{installment.installment_number}/{installment.installments_count}</div></td>
+                              <td>{monthKey(installment.billing_month || "") || "—"}</td>
+                              <td>{datePt(installment.due_date)}</td>
+                              <td>{categoryName(categories, installment.category_id)}</td>
+                              <td>{currencyBRL(installment.amount)}</td>
+                              <td><span className={`badge status-${installment.status}`}>{getInstallmentStatusLabel(installment.status)}</span></td>
+                              <td className="table-actions">
+                                {transaction && installment.status !== "paid" ? <button className="link-button" onClick={() => openInstallmentPayment(transaction)}>Pagar</button> : null}
+                                {transaction && installment.status !== "paid" ? <button className="link-button" onClick={() => anticipateInstallment(transaction)}>Adiantar</button> : null}
+                                {transaction ? <button className="link-button" onClick={() => openInstallmentEdit(transaction)}>Editar</button> : null}
+                                {transaction ? <button className="link-button danger-text" onClick={() => deleteInstallment(transaction)}>Excluir</button> : null}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+              </article>
+            );
+          }) : <div className="empty-state">Nenhum parcelamento ativo.</div>}
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="section-heading">
+          <div>
+            <h2>Projeção</h2>
+            <p>Próximas faturas por cartão a partir de {monthLabel(selectedMonth)}</p>
+          </div>
+        </div>
+        <div className="projection-grid">
+          {projection.length ? projection.map(({ card, months }) => (
+            <article className="projection-card" key={card.id}>
+              <h3>{card.name}</h3>
+              <p className="muted-line">{card.brand || "Cartão"} • Limite {currencyBRL(card.limit_amount)}</p>
+              <div className="table-scroll">
+                <table className="table compact-table">
+                  <thead><tr><th>Competência</th><th>Vencimento</th><th>Itens</th><th>Fatura</th><th>Aberto acumulado</th><th>Disponível proj.</th></tr></thead>
+                  <tbody>
+                    {months.map((item) => (
+                      <tr key={item.billing_month}>
+                        <td>{monthLabel(monthKey(item.billing_month))}</td>
+                        <td>{datePt(item.due_date)}</td>
+                        <td>{item.projected_items_count}</td>
+                        <td>{currencyBRL(item.projected_invoice_amount)}</td>
+                        <td>{currencyBRL(item.cumulative_open_balance)}</td>
+                        <td>{currencyBRL(item.projected_available_limit)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </article>
+          )) : <div className="empty-state">Sem cartões para projetar. Cadastre um cartão e compras futuras para ver a projeção de faturas.</div>}
+        </div>
+      </section>
+
+      {selectedMonthInvoices.length ? (
+        <section className="panel">
+          <div className="section-heading"><div><h2>Faturas gravadas</h2><p>Registros consolidados em banco para a competência selecionada.</p></div></div>
+          <div className="table-scroll">
+            <table className="table compact-table">
+              <thead><tr><th>Cartão</th><th>Fechamento</th><th>Vencimento</th><th>Total</th><th>Pago</th><th>Status</th></tr></thead>
+              <tbody>
+                {selectedMonthInvoices.map((invoice) => {
+                  const card = activeCards.find((item) => item.id === invoice.credit_card_id);
+                  return <tr key={invoice.id}><td>{card?.name || "Cartão removido"}</td><td>{datePt(invoice.closing_date)}</td><td>{datePt(invoice.due_date)}</td><td>{currencyBRL(invoice.total_amount)}</td><td>{currencyBRL(invoice.paid_amount)}</td><td>{invoice.status}</td></tr>;
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+
+      {modal === "card" ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal-card">
+            <div className="modal-header"><div><h2>{cardForm.id ? "Editar cartão" : "Novo cartão"}</h2><p>Defina bandeira, limite, fechamento e vencimento.</p></div><button className="icon-button" onClick={closeModal}>×</button></div>
+            <form onSubmit={submitCard} className="form-grid two-columns">
+              <div className="field"><label>Nome do cartão</label><input value={cardForm.name} onChange={(e) => setCardForm({ ...cardForm, name: e.target.value })} required /></div>
+              <div className="field"><label>Bandeira</label><input value={cardForm.brand} onChange={(e) => setCardForm({ ...cardForm, brand: e.target.value })} placeholder="Visa, Mastercard..." /></div>
+              <div className="field"><label>Limite</label><input type="number" min="0" step="0.01" value={cardForm.limit_amount} onChange={(e) => setCardForm({ ...cardForm, limit_amount: e.target.value })} /></div>
+              <div className="field"><label>Conta vinculada</label><select value={cardForm.account_id} onChange={(e) => setCardForm({ ...cardForm, account_id: e.target.value })}><option value="">Nenhuma</option>{activeAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></div>
+              <div className="field"><label>Dia do fechamento</label><input type="number" min="1" max="31" value={cardForm.closing_day} onChange={(e) => setCardForm({ ...cardForm, closing_day: e.target.value })} /></div>
+              <div className="field"><label>Dia do vencimento</label><input type="number" min="1" max="31" value={cardForm.due_day} onChange={(e) => setCardForm({ ...cardForm, due_day: e.target.value })} /></div>
+              <ColorPickerField
+                label="Cor do cartão"
+                value={cardForm.color}
+                onChange={(color) => setCardForm({ ...cardForm, color })}
+                helper="Ajuda a diferenciar faturas e cartões visualmente."
+              />
+              <div className="field full-span"><label>Observações</label><textarea value={cardForm.notes} onChange={(e) => setCardForm({ ...cardForm, notes: e.target.value })} /></div>
+              <div className="modal-actions full-span"><button className="btn btn-muted" type="button" onClick={closeModal}>Cancelar</button><button className="btn btn-primary" disabled={loading}>{loading ? "Salvando..." : cardForm.id ? "Salvar alterações" : "Salvar cartão"}</button></div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {modal === "purchase" ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal-card">
+            <div className="modal-header"><div><h2>Nova compra no cartão</h2><p>Lance compras únicas ou parceladas. Cada parcela vira um item expandível e sincronizável.</p></div><button className="icon-button" onClick={closeModal}>×</button></div>
+            <form onSubmit={submitPurchase} className="form-grid two-columns">
+              <div className="field full-span"><label>Descrição</label><input value={purchaseForm.description} onChange={(e) => setPurchaseForm({ ...purchaseForm, description: e.target.value })} required /></div>
+              <div className="field"><label>Cartão</label><select value={purchaseForm.credit_card_id} onChange={(e) => setPurchaseForm({ ...purchaseForm, credit_card_id: e.target.value })}>{activeCards.map((card) => <option key={card.id} value={card.id}>{card.name}</option>)}</select></div>
+              <CategoryInputField id="card-purchase-category" value={purchaseForm.category_name} categories={activeCategories} onChange={(category_name) => setPurchaseForm({ ...purchaseForm, category_name, category_id: findCategoryIdByName(categories, category_name) })} />
+              <div className="field"><label>Como informar o valor</label><select value={purchaseForm.amount_mode} onChange={(e) => setPurchaseForm({ ...purchaseForm, amount_mode: e.target.value as PurchaseForm["amount_mode"] })}><option value="total">Valor total</option><option value="installment">Valor de cada parcela</option></select></div>
+              <div className="field"><label>{purchaseForm.amount_mode === "installment" ? "Valor de cada parcela" : "Valor total"}</label><input type="number" min="0.01" step="0.01" value={purchaseForm.amount_value} onChange={(e) => setPurchaseForm({ ...purchaseForm, amount_value: e.target.value })} /><p className="muted-line">Resultado: {purchaseForm.installments_count || 0}x de {currencyBRL(purchasePreview.amounts[0] || 0)} • total {currencyBRL(purchasePreview.totalAmount)}</p></div>
+              <div className="field"><label>Parcelas</label><input type="number" min="1" value={purchaseForm.installments_count} onChange={(e) => setPurchaseForm({ ...purchaseForm, installments_count: e.target.value })} /></div>
+              <div className="field"><label>Data da compra</label><input type="date" value={purchaseForm.purchase_date} onChange={(e) => setPurchaseForm({ ...purchaseForm, purchase_date: e.target.value })} /></div>
+              <div className="field full-span"><label>Observações</label><textarea value={purchaseForm.notes} onChange={(e) => setPurchaseForm({ ...purchaseForm, notes: e.target.value })} /></div>
+              <div className="modal-actions full-span"><button className="btn btn-muted" type="button" onClick={closeModal}>Cancelar</button><button className="btn btn-primary" disabled={loading}>{loading ? "Salvando..." : "Salvar compra"}</button></div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {modal === "invoice" ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal-card">
+            <div className="modal-header"><div><h2>Pagar fatura</h2><p>O app cria a saída na conta e baixa apenas as parcelas em aberto da competência selecionada.</p></div><button className="icon-button" onClick={closeModal}>×</button></div>
+            <form onSubmit={submitInvoicePayment} className="form-grid two-columns">
+              <div className="field"><label>Cartão</label><select value={invoiceForm.credit_card_id} onChange={(e) => { const card = cardMetrics.find((item) => item.id === e.target.value); setInvoiceForm({ ...invoiceForm, credit_card_id: e.target.value, amount: String(card?.current_invoice_amount || 0) }); }}>{cardMetrics.map((card) => <option key={card.id} value={card.id}>{card.name} • {currencyBRL(card.current_invoice_amount)}</option>)}</select></div>
+              <div className="field"><label>Conta de pagamento</label><select value={invoiceForm.account_id} onChange={(e) => setInvoiceForm({ ...invoiceForm, account_id: e.target.value })}>{activeAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></div>
+              <div className="field"><label>Valor pago</label><input type="number" min="0.01" step="0.01" value={invoiceForm.amount} onChange={(e) => setInvoiceForm({ ...invoiceForm, amount: e.target.value })} /></div>
+              <div className="field"><label>Competência</label><input type="month" value={invoiceForm.billing_month} onChange={(e) => setInvoiceForm({ ...invoiceForm, billing_month: e.target.value })} /></div>
+              <div className="field"><label>Data</label><input type="date" value={invoiceForm.date} onChange={(e) => setInvoiceForm({ ...invoiceForm, date: e.target.value })} /></div>
+              <div className="field full-span"><label>Observações</label><textarea value={invoiceForm.notes} onChange={(e) => setInvoiceForm({ ...invoiceForm, notes: e.target.value })} /></div>
+              <div className="modal-actions full-span"><button className="btn btn-muted" type="button" onClick={closeModal}>Cancelar</button><button className="btn btn-primary" disabled={loading}>{loading ? "Registrando..." : "Registrar pagamento"}</button></div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {modal === "installment-edit" && installmentEditForm ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-card"><div className="modal-header"><div><h2>Editar parcela do crédito</h2><p>Ajuste apenas esta parcela sem recriar a compra inteira.</p></div><button className="icon-button" onClick={closeModal}>×</button></div><form onSubmit={submitInstallmentEdit} className="form-grid two-columns"><div className="field full-span"><label>Descrição</label><input value={installmentEditForm.description} onChange={(e) => setInstallmentEditForm({ ...installmentEditForm, description: e.target.value })} /></div><div className="field"><label>Valor</label><input type="number" step="0.01" value={installmentEditForm.amount} onChange={(e) => setInstallmentEditForm({ ...installmentEditForm, amount: e.target.value })} /></div><div className="field"><label>Data da parcela</label><input type="date" value={installmentEditForm.due_date} onChange={(e) => setInstallmentEditForm({ ...installmentEditForm, due_date: e.target.value })} /></div><div className="field"><label>Competência da fatura</label><input type="month" value={installmentEditForm.billing_month} onChange={(e) => setInstallmentEditForm({ ...installmentEditForm, billing_month: e.target.value })} /></div><CategoryInputField id="card-installment-category" value={installmentEditForm.category_name} categories={activeCategories} onChange={(category_name) => setInstallmentEditForm({ ...installmentEditForm, category_name, category_id: findCategoryIdByName(categories, category_name) })} /><div className="field full-span"><label>Observações</label><textarea value={installmentEditForm.notes} onChange={(e) => setInstallmentEditForm({ ...installmentEditForm, notes: e.target.value })} /></div><div className="modal-actions full-span"><button className="btn btn-muted" type="button" onClick={closeModal}>Cancelar</button><button className="btn btn-primary" disabled={loading}>Salvar parcela</button></div></form></div></div>
+      ) : null}
+
+      {modal === "installment-payment" && installmentPaymentForm ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-card"><div className="modal-header"><div><h2>Pagar parcela do cartão</h2><p>Ao confirmar, o app registra a saída na conta e baixa somente esta parcela.</p></div><button className="icon-button" onClick={closeModal}>×</button></div><form onSubmit={submitInstallmentPayment} className="form-grid two-columns"><div className="field"><label>Conta de pagamento</label><select value={installmentPaymentForm.account_id} onChange={(e) => setInstallmentPaymentForm({ ...installmentPaymentForm, account_id: e.target.value })}>{activeAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></div><div className="field"><label>Data do pagamento</label><input type="date" value={installmentPaymentForm.date} onChange={(e) => setInstallmentPaymentForm({ ...installmentPaymentForm, date: e.target.value })} /></div><div className="field full-span"><label>Observações</label><textarea value={installmentPaymentForm.notes} onChange={(e) => setInstallmentPaymentForm({ ...installmentPaymentForm, notes: e.target.value })} /></div><div className="modal-actions full-span"><button className="btn btn-muted" type="button" onClick={closeModal}>Cancelar</button><button className="btn btn-primary" disabled={loading}>Registrar pagamento</button></div></form></div></div>
+      ) : null}
+    </div>
+  );
+}

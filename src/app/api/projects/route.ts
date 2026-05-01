@@ -1,0 +1,180 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { getApiContext, jsonError, mergeMetadata, parseJson } from "@/lib/http/api";
+import { assertCanEdit, assertCanManageSharing, createActivityLog } from "@/lib/server/collaboration";
+
+const projectSchema = z.object({
+  id: z.string().uuid().optional(),
+  name: z.string().trim().min(1, "Nome do projeto é obrigatório."),
+  description: z.string().trim().optional().nullable(),
+  status: z.enum(["active", "completed", "archived", "canceled"]).default("active"),
+  icon: z.string().trim().optional().nullable(),
+  theme_key: z.string().trim().optional().nullable(),
+  image_url: z.string().trim().optional().nullable(),
+  color: z.string().trim().optional().nullable()
+});
+
+const deleteSchema = z.object({ id: z.string().uuid("Projeto inválido.") });
+
+async function safeProfiles(context: any) {
+  const { data, error } = await context.supabase.rpc("visible_profiles_for_user");
+  if (!error) return data || [];
+
+  // Compatibilidade para bancos que ainda não rodaram a migration de segurança.
+  const fallback = await context.supabase
+    .from("profiles")
+    .select("id,email,display_name,avatar_url,created_at,updated_at")
+    .eq("id", context.user.id);
+  return fallback.data || [];
+}
+
+async function loadProjectsBundle(context: any) {
+  const [projects, items, movements, shares, logs, profiles] = await Promise.all([
+    context.supabase.from("projects").select("*").eq("is_deleted", false).order("created_at", { ascending: true }),
+    context.supabase.from("project_items").select("*").eq("is_deleted", false).order("created_at", { ascending: true }),
+    context.supabase.from("project_movements").select("*").eq("is_deleted", false).order("created_at", { ascending: false }),
+    context.supabase.from("shared_items").select("*").eq("item_type", "project").order("created_at", { ascending: true }),
+    context.supabase.from("activity_logs").select("*").in("entity_type", ["project", "project_item", "project_movement"]).order("created_at", { ascending: false }).limit(300),
+    safeProfiles(context)
+  ]);
+
+  const error = projects.error || items.error || movements.error || shares.error || logs.error;
+  if (error) throw new Error(`${error.message}. Verifique se as migrations 0005 e 0007 foram rodadas no Supabase.`);
+
+  return {
+    projects: projects.data || [],
+    items: items.data || [],
+    movements: movements.data || [],
+    shares: shares.data || [],
+    activityLogs: logs.data || [],
+    profiles: profiles || []
+  };
+}
+
+export async function GET() {
+  const context = await getApiContext();
+  if ("error" in context) return context.error;
+
+  try {
+    const bundle = await loadProjectsBundle(context);
+    return NextResponse.json(bundle);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "Não foi possível carregar projetos.", 500);
+  }
+}
+
+export async function POST(request: Request) {
+  const context = await getApiContext();
+  if ("error" in context) return context.error;
+
+  try {
+    const payload = await parseJson(request, projectSchema);
+    const record = {
+      owner_id: context.user.id,
+      name: payload.name,
+      description: payload.description || null,
+      target_amount: 0,
+      current_amount: 0,
+      status: payload.status,
+      color: payload.color || null,
+      image_url: payload.image_url || null,
+      is_deleted: false,
+      metadata: { icon: payload.icon || "✨", theme_key: payload.theme_key || "aurora" }
+    };
+
+    const { data, error } = await context.supabase.from("projects").insert(record).select("*").single();
+    if (error) return jsonError(error.message, 500);
+
+    await createActivityLog(context.supabase, {
+      ownerId: context.user.id,
+      actorId: context.user.id,
+      entityType: "project",
+      entityId: data.id,
+      actionType: "project_created",
+      newValue: data.name
+    });
+
+    return NextResponse.json({ data }, { status: 201 });
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "Não foi possível salvar o projeto.");
+  }
+}
+
+export async function PATCH(request: Request) {
+  const context = await getApiContext();
+  if ("error" in context) return context.error;
+
+  try {
+    const payload = await parseJson(request, projectSchema.extend({ id: z.string().uuid("Projeto inválido.") }));
+    const access = await assertCanEdit(context.supabase, "project", payload.id, context.user.id);
+
+    const { data: existing, error: existingError } = await context.supabase
+      .from("projects")
+      .select("*")
+      .eq("id", payload.id)
+      .single();
+
+    if (existingError || !existing) return jsonError("Projeto não encontrado.", 404);
+
+    const update = {
+      name: payload.name,
+      description: payload.description || null,
+      status: payload.status,
+      color: payload.color || null,
+      image_url: payload.image_url || null,
+      metadata: mergeMetadata(existing.metadata, { icon: payload.icon || "✨", theme_key: payload.theme_key || "aurora" })
+    };
+
+    const { data, error } = await context.supabase
+      .from("projects")
+      .update(update)
+      .eq("id", payload.id)
+      .select("*")
+      .single();
+
+    if (error) return jsonError(error.message, 500);
+
+    await createActivityLog(context.supabase, {
+      ownerId: access.ownerId,
+      actorId: context.user.id,
+      entityType: "project",
+      entityId: payload.id,
+      actionType: "project_updated",
+      previousValue: { name: existing.name, description: existing.description, status: existing.status },
+      newValue: { name: data.name, description: data.description, status: data.status }
+    });
+
+    return NextResponse.json({ data });
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "Não foi possível atualizar o projeto.");
+  }
+}
+
+export async function DELETE(request: Request) {
+  const context = await getApiContext();
+  if ("error" in context) return context.error;
+
+  try {
+    const payload = await parseJson(request, deleteSchema);
+    const access = await assertCanManageSharing(context.supabase, "project", payload.id, context.user.id);
+
+    const { error } = await context.supabase
+      .from("projects")
+      .update({ is_deleted: true, status: "archived" })
+      .eq("id", payload.id);
+
+    if (error) return jsonError(error.message, 500);
+
+    await createActivityLog(context.supabase, {
+      ownerId: access.ownerId,
+      actorId: context.user.id,
+      entityType: "project",
+      entityId: payload.id,
+      actionType: "project_deleted"
+    });
+
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "Não foi possível excluir o projeto.");
+  }
+}

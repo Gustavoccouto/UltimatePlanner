@@ -1,0 +1,882 @@
+"use client";
+
+import { FormEvent, useMemo, useState } from "react";
+import type { Account, Category, CreditCard, Installment, InstallmentPlan, RecurringRule, Transaction } from "@/lib/domain/app-types";
+import { deriveAccountSummaries, labelTransactionStatus, labelTransactionType } from "@/lib/domain/account-balances";
+import { currencyBRL, datePt, isInMonth, monthInput, monthLabel, todayInput } from "@/lib/domain/formatters";
+import { CategoryInputField } from "@/components/ui/category-input-field";
+import {
+  buildDebitInstallmentDrafts,
+  buildDebitPlanViews,
+  getInstallmentStatusLabel,
+  labelFrequency,
+  labelRuleType
+} from "@/lib/domain/planning";
+
+type TransactionForm = {
+  id?: string;
+  description: string;
+  type: "income" | "expense" | "transfer" | "adjust";
+  amount: string;
+  account_id: string;
+  destination_account_id: string;
+  category_id: string;
+  category_name: string;
+  date: string;
+  status: "posted" | "planned" | "canceled";
+  adjustment_direction: "add" | "subtract";
+  notes: string;
+};
+
+type RecurringForm = {
+  id?: string;
+  name: string;
+  rule_type: "recurring_income" | "recurring_expense";
+  target_type: "account" | "card";
+  account_id: string;
+  credit_card_id: string;
+  category_id: string;
+  category_name: string;
+  amount: string;
+  frequency: "weekly" | "monthly" | "quarterly" | "yearly";
+  start_date: string;
+  end_date: string;
+  notes: string;
+};
+
+type DebitInstallmentForm = {
+  description: string;
+  account_id: string;
+  category_id: string;
+  category_name: string;
+  amount_mode: "total" | "installment";
+  amount_value: string;
+  installments_count: string;
+  first_date: string;
+  notes: string;
+};
+
+type DebitInstallmentEditForm = {
+  id: string;
+  description: string;
+  amount: string;
+  due_date: string;
+  category_id: string;
+  category_name: string;
+  notes: string;
+};
+
+type ModalKind = "transaction" | "recurring" | "debit" | "debit-edit" | null;
+
+const emptyTransactionForm: TransactionForm = {
+  description: "",
+  type: "expense",
+  amount: "0",
+  account_id: "",
+  destination_account_id: "",
+  category_id: "",
+  category_name: "",
+  date: todayInput(),
+  status: "posted",
+  adjustment_direction: "add",
+  notes: ""
+};
+
+const emptyRecurringForm: RecurringForm = {
+  name: "",
+  rule_type: "recurring_expense",
+  target_type: "account",
+  account_id: "",
+  credit_card_id: "",
+  category_id: "",
+  category_name: "",
+  amount: "0",
+  frequency: "monthly",
+  start_date: todayInput(),
+  end_date: "",
+  notes: ""
+};
+
+const emptyDebitForm: DebitInstallmentForm = {
+  description: "",
+  account_id: "",
+  category_id: "",
+  category_name: "",
+  amount_mode: "total",
+  amount_value: "0",
+  installments_count: "2",
+  first_date: todayInput(),
+  notes: ""
+};
+
+const emptyDebitEditForm: DebitInstallmentEditForm = {
+  id: "",
+  description: "",
+  amount: "0",
+  due_date: todayInput(),
+  category_id: "",
+  category_name: "",
+  notes: ""
+};
+
+async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers || {}) }
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "Erro inesperado.");
+  return payload as T;
+}
+
+function categoryName(categories: Category[], id?: string | null) {
+  if (!id) return "Sem categoria";
+  return categories.find((category) => category.id === id)?.name || "Categoria removida";
+}
+
+function categoryInputValue(categories: Category[], id?: string | null) {
+  if (!id) return "";
+  const name = categories.find((category) => category.id === id)?.name;
+  return name || "";
+}
+
+function findCategoryIdByName(categories: Category[], name?: string | null) {
+  const normalized = String(name || "").trim().toLowerCase();
+  if (!normalized) return "";
+  return categories.find((category) => category.name.trim().toLowerCase() === normalized)?.id || "";
+}
+
+function accountName(accounts: Account[], id?: string | null) {
+  if (!id) return "—";
+  return accounts.find((account) => account.id === id)?.name || "Conta removida";
+}
+
+function cardName(cards: CreditCard[], id?: string | null) {
+  if (!id) return "—";
+  return cards.find((card) => card.id === id)?.name || "Cartão removido";
+}
+
+function transactionBinding(accounts: Account[], cards: CreditCard[], transaction: Transaction) {
+  if (transaction.type === "card_expense") return cardName(cards, transaction.credit_card_id);
+  return accountName(accounts, transaction.account_id);
+}
+
+function toTransactionForm(transaction: Transaction, categoriesCache: Category[]): TransactionForm {
+  const direction = transaction.metadata?.adjustment_direction === "subtract" ? "subtract" : "add";
+  return {
+    id: transaction.id,
+    description: transaction.description,
+    type: ["income", "expense", "transfer", "adjust"].includes(transaction.type) ? transaction.type as TransactionForm["type"] : "expense",
+    amount: String(transaction.amount || 0),
+    account_id: transaction.account_id || "",
+    destination_account_id: transaction.destination_account_id || "",
+    category_id: transaction.category_id || "",
+    category_name: categoryInputValue(categoriesCache, transaction.category_id),
+    date: transaction.date,
+    status: transaction.status,
+    adjustment_direction: direction,
+    notes: transaction.notes || ""
+  };
+}
+
+function toRecurringForm(rule: RecurringRule, categoriesCache: Category[]): RecurringForm {
+  return {
+    id: rule.id,
+    name: rule.name,
+    rule_type: rule.rule_type,
+    target_type: rule.rule_type === "recurring_income" ? "account" : rule.target_type,
+    account_id: rule.account_id || "",
+    credit_card_id: rule.credit_card_id || "",
+    category_id: rule.category_id || "",
+    category_name: categoryInputValue(categoriesCache, rule.category_id),
+    amount: String(rule.amount || 0),
+    frequency: rule.frequency || "monthly",
+    start_date: rule.start_date,
+    end_date: rule.end_date || "",
+    notes: rule.notes || ""
+  };
+}
+
+export function TransactionsClient({
+  initialAccounts,
+  initialCategories,
+  initialTransactions,
+  initialRecurringRules,
+  initialDebitPlans,
+  initialDebitInstallments,
+  initialCreditCards
+}: {
+  initialAccounts: Account[];
+  initialCategories: Category[];
+  initialTransactions: Transaction[];
+  initialRecurringRules: RecurringRule[];
+  initialDebitPlans: InstallmentPlan[];
+  initialDebitInstallments: Installment[];
+  initialCreditCards: CreditCard[];
+}) {
+  const [accounts] = useState<Account[]>(initialAccounts);
+  const [categories, setCategories] = useState<Category[]>(initialCategories);
+  const [cards] = useState<CreditCard[]>(initialCreditCards);
+  const [transactions, setTransactions] = useState<Transaction[]>(initialTransactions);
+  const [recurringRules, setRecurringRules] = useState<RecurringRule[]>(initialRecurringRules);
+  const [debitPlans, setDebitPlans] = useState<InstallmentPlan[]>(initialDebitPlans);
+  const [debitInstallments, setDebitInstallments] = useState<Installment[]>(initialDebitInstallments);
+  const [selectedMonth, setSelectedMonth] = useState(monthInput());
+  const [query, setQuery] = useState("");
+  const [transactionForm, setTransactionForm] = useState<TransactionForm>(emptyTransactionForm);
+  const [recurringForm, setRecurringForm] = useState<RecurringForm>(emptyRecurringForm);
+  const [debitForm, setDebitForm] = useState<DebitInstallmentForm>(emptyDebitForm);
+  const [debitEditForm, setDebitEditForm] = useState<DebitInstallmentEditForm>(emptyDebitEditForm);
+  const [modal, setModal] = useState<ModalKind>(null);
+  const [expandedPlans, setExpandedPlans] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  const activeAccounts = accounts.filter((account) => !account.is_deleted && !account.is_archived);
+  const activeCategories = categories.filter((category) => !category.is_deleted && !category.is_archived);
+  const activeCards = cards.filter((card) => !card.is_deleted && !card.is_archived);
+  const summaries = useMemo(() => deriveAccountSummaries(activeAccounts, transactions), [activeAccounts, transactions]);
+  const debitPlanViews = useMemo(() => buildDebitPlanViews(debitPlans, debitInstallments, transactions), [debitInstallments, debitPlans, transactions]);
+
+  const visibleRows = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return transactions
+      .filter((transaction) => !transaction.is_deleted)
+      .filter((transaction) => isInMonth(transaction.date, selectedMonth) || isInMonth(transaction.billing_month || "", selectedMonth))
+      .filter((transaction) => {
+        if (!normalizedQuery) return true;
+        return [
+          transaction.description,
+          transaction.notes || "",
+          categoryName(categories, transaction.category_id),
+          accountName(accounts, transaction.account_id),
+          cardName(cards, transaction.credit_card_id)
+        ].join(" ").toLowerCase().includes(normalizedQuery);
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [accounts, cards, categories, query, selectedMonth, transactions]);
+
+  const monthIncome = visibleRows.filter((transaction) => transaction.type === "income").reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
+  const monthExpenses = visibleRows
+    .filter((transaction) => ["expense", "card_expense", "invoice_payment"].includes(transaction.type))
+    .reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
+  const monthTransfers = visibleRows.filter((transaction) => transaction.type === "transfer").length;
+  const activeRecurringCount = recurringRules.filter((rule) => rule.is_active).length;
+  const pendingDebitInstallments = debitPlanViews.reduce((sum, plan) => sum + Number(plan.remaining_count || 0), 0);
+
+  function clearAlerts() {
+    setMessage("");
+    setError("");
+  }
+
+  function openCreateTransaction(type: TransactionForm["type"] = "expense") {
+    setTransactionForm({ ...emptyTransactionForm, type, account_id: activeAccounts[0]?.id || "" });
+    clearAlerts();
+    setModal("transaction");
+  }
+
+  function openEditTransaction(transaction: Transaction) {
+    setTransactionForm(toTransactionForm(transaction, categories));
+    clearAlerts();
+    setModal("transaction");
+  }
+
+  function openCreateRecurring(ruleType: RecurringForm["rule_type"]) {
+    setRecurringForm({
+      ...emptyRecurringForm,
+      rule_type: ruleType,
+      target_type: "account",
+      account_id: activeAccounts[0]?.id || "",
+      credit_card_id: activeCards[0]?.id || ""
+    });
+    clearAlerts();
+    setModal("recurring");
+  }
+
+  function openEditRecurring(rule: RecurringRule) {
+    setRecurringForm(toRecurringForm(rule, categories));
+    clearAlerts();
+    setModal("recurring");
+  }
+
+  function openDebitInstallment() {
+    setDebitForm({ ...emptyDebitForm, account_id: activeAccounts[0]?.id || "" });
+    clearAlerts();
+    setModal("debit");
+  }
+
+  function openEditDebitInstallment(installment: Installment & { transaction?: Transaction }) {
+    if (!installment.transaction?.id) {
+      setError("Parcela sem transação vinculada. Atualize a página e tente novamente.");
+      return;
+    }
+    setDebitEditForm({
+      id: installment.transaction.id,
+      description: installment.description,
+      amount: String(installment.amount || 0),
+      due_date: installment.due_date,
+      category_id: installment.category_id || "",
+      category_name: categoryInputValue(categories, installment.category_id),
+      notes: String(installment.metadata?.notes || installment.transaction.notes || "")
+    });
+    clearAlerts();
+    setModal("debit-edit");
+  }
+
+  async function reloadCategories() {
+    const payload = await requestJson<{ data: Category[] }>("/api/categories");
+    setCategories(payload.data);
+    return payload.data;
+  }
+
+  async function reloadTransactions() {
+    const [transactionsPayload] = await Promise.all([
+      requestJson<{ data: Transaction[] }>("/api/transactions"),
+      reloadCategories()
+    ]);
+    setTransactions(transactionsPayload.data);
+  }
+
+  async function reloadPlanning() {
+    const [transactionsPayload, rulesPayload, debitPayload] = await Promise.all([
+      requestJson<{ data: Transaction[] }>("/api/transactions"),
+      requestJson<{ data: RecurringRule[] }>("/api/recurring-rules"),
+      requestJson<{ data: { plans: InstallmentPlan[]; installments: Installment[] } }>("/api/debit-installments"),
+      reloadCategories()
+    ]);
+    setTransactions(transactionsPayload.data);
+    setRecurringRules(rulesPayload.data);
+    setDebitPlans(debitPayload.data.plans);
+    setDebitInstallments(debitPayload.data.installments);
+  }
+
+  function willMakeAnyAccountNegative(nextTransactions: Transaction[]) {
+    return deriveAccountSummaries(activeAccounts, nextTransactions).some((account) => account.derived_balance < 0);
+  }
+
+  function previewTransaction(nextForm: TransactionForm): Transaction {
+    return {
+      id: nextForm.id || "preview",
+      owner_id: activeAccounts[0]?.owner_id || "preview",
+      description: nextForm.description,
+      type: nextForm.type,
+      amount: Number(nextForm.amount || 0),
+      date: nextForm.date,
+      account_id: nextForm.account_id || null,
+      destination_account_id: nextForm.type === "transfer" ? nextForm.destination_account_id || null : null,
+      category_id: nextForm.category_id || findCategoryIdByName(categories, nextForm.category_name) || null,
+      status: nextForm.status,
+      is_paid: nextForm.status === "posted",
+      is_deleted: false,
+      notes: nextForm.notes,
+      metadata: { adjustment_direction: nextForm.adjustment_direction }
+    };
+  }
+
+  async function handleTransactionSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeAccounts.length) {
+      setError("Cadastre ao menos uma conta antes de criar transações.");
+      return;
+    }
+
+    const previous = transactionForm.id ? transactions.filter((transaction) => transaction.id !== transactionForm.id) : transactions;
+    if (willMakeAnyAccountNegative([...previous, previewTransaction(transactionForm)])) {
+      const confirmed = window.confirm("Atenção\n\nEsta transação pode deixar uma conta negativa. Deseja continuar mesmo assim?");
+      if (!confirmed) return;
+    }
+
+    setLoading(true);
+    clearAlerts();
+    try {
+      await requestJson<{ data: Transaction }>("/api/transactions", {
+        method: transactionForm.id ? "PATCH" : "POST",
+        body: JSON.stringify({
+          ...transactionForm,
+          amount: Number(transactionForm.amount || 0),
+          category_id: transactionForm.category_id || findCategoryIdByName(categories, transactionForm.category_name) || null,
+          category_name: transactionForm.category_name || null,
+          destination_account_id: transactionForm.type === "transfer" ? transactionForm.destination_account_id || null : null
+        })
+      });
+      await reloadTransactions();
+      setModal(null);
+      setMessage(transactionForm.id ? "Transação atualizada com sucesso." : "Transação salva com sucesso.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível salvar.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDeleteTransaction(transaction: Transaction) {
+    const confirmed = window.confirm("Excluir transação\n\nA transação será marcada como excluída e deixará de compor os saldos derivados.");
+    if (!confirmed) return;
+
+    setLoading(true);
+    clearAlerts();
+    try {
+      await requestJson<{ ok: boolean }>("/api/transactions", { method: "DELETE", body: JSON.stringify({ id: transaction.id }) });
+      await reloadPlanning();
+      setMessage("Transação excluída.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível excluir.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRecurringSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    setLoading(true);
+    clearAlerts();
+    try {
+      await requestJson<{ data: RecurringRule }>("/api/recurring-rules", {
+        method: recurringForm.id ? "PATCH" : "POST",
+        body: JSON.stringify({
+          ...recurringForm,
+          amount: Number(recurringForm.amount || 0),
+          target_type: recurringForm.rule_type === "recurring_income" ? "account" : recurringForm.target_type,
+          category_id: recurringForm.category_id || findCategoryIdByName(categories, recurringForm.category_name) || null,
+          category_name: recurringForm.category_name || null,
+          account_id: recurringForm.account_id || null,
+          credit_card_id: recurringForm.credit_card_id || null,
+          end_date: recurringForm.end_date || null
+        })
+      });
+      await reloadPlanning();
+      setModal(null);
+      setMessage(recurringForm.id ? "Recorrência atualizada e lançamentos futuros recalculados." : "Recorrência criada e lançamentos futuros gerados.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível salvar a recorrência.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDeleteRecurring(rule: RecurringRule) {
+    const confirmed = window.confirm(
+      "Excluir recorrência\n\nA regra será desativada e todos os lançamentos futuros gerados por ela serão removidos. Lançamentos passados permanecem."
+    );
+    if (!confirmed) return;
+
+    setLoading(true);
+    clearAlerts();
+    try {
+      await requestJson<{ ok: boolean }>("/api/recurring-rules", { method: "DELETE", body: JSON.stringify({ id: rule.id, from_date: todayInput() }) });
+      await reloadPlanning();
+      setMessage("Recorrência excluída e lançamentos futuros removidos.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível excluir a recorrência.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDebitSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const debit = buildDebitInstallmentDrafts({
+      description: debitForm.description,
+      amountMode: debitForm.amount_mode,
+      amountValue: Number(debitForm.amount_value || 0),
+      installmentsCount: Number(debitForm.installments_count || 0),
+      firstDate: debitForm.first_date
+    });
+
+    const candidateTransactions: Transaction[] = debit.drafts.map((draft, index) => ({
+      id: `preview-${index}`,
+      owner_id: activeAccounts[0]?.owner_id || "preview",
+      description: draft.description,
+      type: "expense",
+      amount: draft.amount,
+      date: draft.due_date,
+      account_id: debitForm.account_id,
+      category_id: debitForm.category_id || findCategoryIdByName(categories, debitForm.category_name) || null,
+      status: "posted",
+      is_paid: false,
+      is_deleted: false,
+      metadata: { payment_method: "debit", installment_status: "pending" }
+    }));
+
+    if (willMakeAnyAccountNegative([...transactions, ...candidateTransactions])) {
+      const confirmed = window.confirm("Atenção\n\nEste parcelamento pode deixar uma conta negativa. Deseja continuar mesmo assim?");
+      if (!confirmed) return;
+    }
+
+    setLoading(true);
+    clearAlerts();
+    try {
+      await requestJson<{ data: unknown }>("/api/debit-installments", {
+        method: "POST",
+        body: JSON.stringify({
+          ...debitForm,
+          category_id: debitForm.category_id || findCategoryIdByName(categories, debitForm.category_name) || null,
+          category_name: debitForm.category_name || null,
+          amount_value: Number(debitForm.amount_value || 0),
+          installments_count: Number(debitForm.installments_count || 0)
+        })
+      });
+      await reloadPlanning();
+      setModal(null);
+      setMessage("Parcelamento no débito criado com sucesso.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível criar o parcelamento.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDebitInstallmentAction(action: "pay" | "anticipate" | "delete", transactionId: string) {
+    const labels = { pay: "marcar esta parcela como paga", anticipate: "adiantar esta parcela para hoje", delete: "excluir esta parcela" };
+    const confirmed = window.confirm(`Confirmar\n\nDeseja ${labels[action]}?`);
+    if (!confirmed) return;
+
+    setLoading(true);
+    clearAlerts();
+    try {
+      await requestJson<{ data: Transaction }>("/api/debit-installments/installments", {
+        method: "PATCH",
+        body: JSON.stringify({ action, id: transactionId, date: todayInput() })
+      });
+      await reloadPlanning();
+      setMessage(action === "pay" ? "Parcela marcada como paga." : action === "anticipate" ? "Parcela adiantada." : "Parcela excluída.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível atualizar a parcela.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDebitEditSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    clearAlerts();
+    try {
+      await requestJson<{ data: Transaction }>("/api/debit-installments/installments", {
+        method: "PATCH",
+        body: JSON.stringify({
+          action: "edit",
+          ...debitEditForm,
+          amount: Number(debitEditForm.amount || 0),
+          category_id: debitEditForm.category_id || findCategoryIdByName(categories, debitEditForm.category_name) || null,
+          category_name: debitEditForm.category_name || null
+        })
+      });
+      await reloadPlanning();
+      setModal(null);
+      setMessage("Parcela atualizada.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível editar a parcela.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDeleteDebitPlan(plan: InstallmentPlan) {
+    const confirmed = window.confirm("Excluir parcelamento\n\nTodas as parcelas futuras e transações ligadas a este parcelamento serão canceladas.");
+    if (!confirmed) return;
+
+    setLoading(true);
+    clearAlerts();
+    try {
+      await requestJson<{ ok: boolean }>("/api/debit-installments", { method: "DELETE", body: JSON.stringify({ id: plan.id }) });
+      await reloadPlanning();
+      setMessage("Parcelamento excluído.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível excluir o parcelamento.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function togglePlan(planId: string) {
+    setExpandedPlans((current) => {
+      const next = new Set(current);
+      if (next.has(planId)) next.delete(planId);
+      else next.add(planId);
+      return next;
+    });
+  }
+
+  function setAllPlansExpanded(expanded: boolean) {
+    setExpandedPlans(expanded ? new Set(debitPlanViews.map((plan) => plan.id)) : new Set());
+  }
+
+  return (
+    <div className="grid">
+      <header className="page-header">
+        <div>
+          <h1 className="page-title">Transações</h1>
+          <p className="page-caption">Receitas, despesas, transferências, recorrências e parcelamentos no débito com consistência de dados.</p>
+        </div>
+        <div className="header-actions">
+          <button className="btn btn-muted" type="button" onClick={() => openCreateTransaction("income")}>Nova transação</button>
+          <button className="btn btn-muted" type="button" onClick={() => openCreateRecurring("recurring_income")}>Receita recorrente</button>
+          <button className="btn btn-muted" type="button" onClick={() => openCreateRecurring("recurring_expense")}>Gasto recorrente</button>
+          <button className="btn btn-primary" type="button" onClick={openDebitInstallment}>Parcelar no débito</button>
+        </div>
+      </header>
+
+      {error ? <div className="alert alert-error">{error}</div> : null}
+      {message ? <div className="alert alert-success">{message}</div> : null}
+
+      <section className="stats-grid transactions-stats-grid">
+        <article className="stat-card"><div className="stat-label">Receitas em {monthLabel(selectedMonth)}</div><div className="stat-value">{currencyBRL(monthIncome)}</div></article>
+        <article className="stat-card"><div className="stat-label">Despesas em {monthLabel(selectedMonth)}</div><div className="stat-value">{currencyBRL(monthExpenses)}</div></article>
+        <article className="stat-card"><div className="stat-label">Parcelamentos no débito</div><div className="stat-value">{pendingDebitInstallments}</div></article>
+        <article className="stat-card"><div className="stat-label">Recorrências ativas</div><div className="stat-value">{activeRecurringCount}</div></article>
+      </section>
+
+      <section className="panel filters-panel">
+        <label className="field inline-field">Mês
+          <input type="month" value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)} />
+        </label>
+        <label className="field inline-field">Busca
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar por descrição, conta, cartão ou categoria" />
+        </label>
+        <button className="btn btn-muted" type="button" onClick={() => openCreateTransaction("transfer")}>Transferência</button>
+        <button className="btn btn-muted" type="button" onClick={() => openCreateTransaction("adjust")}>Ajuste</button>
+      </section>
+
+      <section className="panel">
+        <div className="section-heading">
+          <div>
+            <h2>Histórico</h2>
+            <p>Lançamentos de {monthLabel(selectedMonth)}</p>
+          </div>
+          <span className="badge">{visibleRows.length} registro(s)</span>
+        </div>
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr><th>Descrição</th><th>Tipo</th><th>Conta/Cartão</th><th>Data</th><th>Valor</th><th>Status</th><th>Ações</th></tr>
+            </thead>
+            <tbody>
+              {visibleRows.length ? visibleRows.map((transaction) => (
+                <tr key={transaction.id}>
+                  <td>
+                    <strong>{transaction.description}</strong>
+                    <div className="muted-line">
+                      {categoryName(categories, transaction.category_id)}
+                      {transaction.destination_account_id ? ` • para ${accountName(accounts, transaction.destination_account_id)}` : ""}
+                      {transaction.recurring_rule_id ? " • gerada por recorrência" : ""}
+                      {transaction.installment_plan_id ? ` • parcela ${transaction.metadata?.installment_number || "—"}/${transaction.metadata?.installments_count || "—"}` : ""}
+                    </div>
+                  </td>
+                  <td>{labelTransactionType(transaction.type)}</td>
+                  <td>{transactionBinding(accounts, cards, transaction)}</td>
+                  <td>{datePt(transaction.date)}{transaction.billing_month ? <div className="muted-line">Fatura {monthLabel(String(transaction.billing_month).slice(0, 7))}</div> : null}</td>
+                  <td>{currencyBRL(transaction.amount)}</td>
+                  <td>{labelTransactionStatus(transaction.status)}</td>
+                  <td className="table-actions">
+                    {transaction.type === "card_expense" || transaction.installment_id || transaction.recurring_rule_id ? null : <button className="link-button" type="button" onClick={() => openEditTransaction(transaction)}>Editar</button>}
+                    <button className="link-button danger-text" type="button" onClick={() => handleDeleteTransaction(transaction)} disabled={loading}>Excluir</button>
+                  </td>
+                </tr>
+              )) : <tr><td colSpan={7}>Nenhuma transação para {monthLabel(selectedMonth)}.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="section-heading">
+          <div>
+            <h2>Automação</h2>
+            <p>Regras recorrentes materializadas no banco para compor projeções e histórico.</p>
+          </div>
+          <span className="badge">{activeRecurringCount} ativa(s)</span>
+        </div>
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr><th>Nome</th><th>Tipo</th><th>Vínculo</th><th>Frequência</th><th>Início</th><th>Próximo</th><th>Ações</th></tr>
+            </thead>
+            <tbody>
+              {recurringRules.length ? recurringRules.map((rule) => (
+                <tr key={rule.id} className={rule.is_active ? "" : "muted-row"}>
+                  <td><strong>{rule.name}</strong><div className="muted-line">{categoryName(categories, rule.category_id)} • {currencyBRL(rule.amount)}</div></td>
+                  <td>{labelRuleType(rule.rule_type)}{!rule.is_active ? <div className="muted-line">Inativa</div> : null}</td>
+                  <td>{rule.target_type === "card" ? `Cartão • ${cardName(cards, rule.credit_card_id)}` : `Conta • ${accountName(accounts, rule.account_id)}`}</td>
+                  <td>{labelFrequency(rule.frequency)}</td>
+                  <td>{datePt(rule.start_date)}{rule.end_date ? <div className="muted-line">até {datePt(rule.end_date)}</div> : null}</td>
+                  <td>{rule.next_occurrence ? datePt(rule.next_occurrence) : "—"}</td>
+                  <td className="table-actions">
+                    {rule.is_active ? <button className="link-button" type="button" onClick={() => openEditRecurring(rule)}>Editar</button> : null}
+                    {rule.is_active ? <button className="link-button danger-text" type="button" onClick={() => handleDeleteRecurring(rule)} disabled={loading}>Excluir</button> : null}
+                  </td>
+                </tr>
+              )) : <tr><td colSpan={7}>Nenhuma regra recorrente cadastrada.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel installment-section">
+        <div className="section-heading">
+          <div>
+            <h2>Parcelamentos</h2>
+            <p>Parcelamentos no débito com item principal expansível e parcelas visíveis individualmente.</p>
+          </div>
+          <div className="header-actions compact-actions">
+            <span className="badge">{pendingDebitInstallments} pendente(s)</span>
+            {debitPlanViews.length ? <button className="link-button" type="button" onClick={() => setAllPlansExpanded(true)}>Expandir tudo</button> : null}
+            {debitPlanViews.length ? <button className="link-button" type="button" onClick={() => setAllPlansExpanded(false)}>Recolher tudo</button> : null}
+          </div>
+        </div>
+        <div className="installment-list">
+          {debitPlanViews.length ? debitPlanViews.map((plan) => {
+            const isExpanded = expandedPlans.has(plan.id);
+            return (
+              <article className="installment-card" key={plan.id}>
+                <div className="installment-card-header">
+                  <div>
+                    <h3>{plan.description}</h3>
+                    <p>{categoryName(categories, plan.category_id)} • início {datePt(plan.first_date)}</p>
+                  </div>
+                  <button className="btn btn-muted" type="button" onClick={() => togglePlan(plan.id)}>{isExpanded ? "Recolher detalhes" : "Ver parcelas"}</button>
+                </div>
+                <div className="installment-summary-grid">
+                  <span><small>Total</small><strong>{currencyBRL(plan.total_amount)}</strong></span>
+                  <span><small>Pendentes</small><strong>{plan.remaining_count}</strong></span>
+                  <span><small>Progresso</small><strong>{plan.settled_count}/{plan.installments_count}</strong></span>
+                  <span><small>Última parcela</small><strong>{plan.installments.length ? datePt(plan.installments[plan.installments.length - 1].due_date) : "—"}</strong></span>
+                </div>
+                {isExpanded ? (
+                  <div className="installment-items">
+                    {plan.installments.map((installment) => (
+                      <div className="installment-item" key={installment.id}>
+                        <div>
+                          <strong>Parcela {installment.installment_number}/{installment.installments_count}</strong>
+                          <p>{datePt(installment.due_date)} • {currencyBRL(installment.amount)}{installment.anticipated_at ? " • antecipada" : ""}</p>
+                        </div>
+                        <span className={`badge installment-status-${installment.status}`}>{getInstallmentStatusLabel(installment.status)}</span>
+                        <div className="table-actions">
+                          {installment.status === "pending" && installment.transaction?.id ? <button className="link-button" type="button" onClick={() => handleDebitInstallmentAction("pay", installment.transaction!.id)} disabled={loading}>Marcar paga</button> : null}
+                          {installment.status === "pending" && installment.transaction?.id ? <button className="link-button" type="button" onClick={() => handleDebitInstallmentAction("anticipate", installment.transaction!.id)} disabled={loading}>Adiantar</button> : null}
+                          <button className="link-button" type="button" onClick={() => openEditDebitInstallment(installment)}>Editar</button>
+                          {installment.transaction?.id ? <button className="link-button danger-text" type="button" onClick={() => handleDebitInstallmentAction("delete", installment.transaction!.id)} disabled={loading}>Excluir</button> : null}
+                        </div>
+                      </div>
+                    ))}
+                    <button className="link-button danger-text" type="button" onClick={() => handleDeleteDebitPlan(plan)} disabled={loading}>Excluir parcelamento</button>
+                  </div>
+                ) : null}
+              </article>
+            );
+          }) : <p className="empty-state">Nenhum parcelamento no débito cadastrado.</p>}
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="section-heading">
+          <div>
+            <h2>Saldos derivados</h2>
+            <p>Espelha a regra do projeto atual: saldo vem das transações, não de digitação manual diária.</p>
+          </div>
+        </div>
+        <div className="mini-card-grid">
+          {summaries.map((account) => (
+            <article className="mini-card" key={account.id}>
+              <span>{account.name}</span>
+              <strong>{currencyBRL(account.derived_balance)}</strong>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      {modal === "transaction" ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <form className="modal-card" onSubmit={handleTransactionSubmit}>
+            <div className="modal-header">
+              <div><h2>{transactionForm.id ? "Editar transação" : "Nova transação"}</h2><p>Suporta receita, despesa, transferência e ajuste.</p></div>
+              <button className="icon-button" type="button" onClick={() => setModal(null)}>Fechar</button>
+            </div>
+            <div className="form-grid two-columns">
+              <label className="field full-span">Descrição<input value={transactionForm.description} onChange={(event) => setTransactionForm((current) => ({ ...current, description: event.target.value }))} required /></label>
+              <label className="field">Tipo<select value={transactionForm.type} onChange={(event) => setTransactionForm((current) => ({ ...current, type: event.target.value as TransactionForm["type"] }))}><option value="expense">Despesa</option><option value="income">Receita</option><option value="transfer">Transferência</option><option value="adjust">Ajuste</option></select></label>
+              <label className="field">Valor<input type="number" step="0.01" min="0.01" value={transactionForm.amount} onChange={(event) => setTransactionForm((current) => ({ ...current, amount: event.target.value }))} required /></label>
+              <label className="field">Conta origem<select value={transactionForm.account_id} onChange={(event) => setTransactionForm((current) => ({ ...current, account_id: event.target.value }))} required><option value="">Selecione</option>{activeAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
+              <label className={`field ${transactionForm.type === "transfer" ? "" : "hidden"}`}>Conta destino<select value={transactionForm.destination_account_id} onChange={(event) => setTransactionForm((current) => ({ ...current, destination_account_id: event.target.value }))} required={transactionForm.type === "transfer"}><option value="">Nenhuma</option>{activeAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
+              <label className={`field ${transactionForm.type === "adjust" ? "" : "hidden"}`}>Direção do ajuste<select value={transactionForm.adjustment_direction} onChange={(event) => setTransactionForm((current) => ({ ...current, adjustment_direction: event.target.value as TransactionForm["adjustment_direction"] }))}><option value="add">Somar ao saldo</option><option value="subtract">Subtrair do saldo</option></select></label>
+              <CategoryInputField id="transaction-category" value={transactionForm.category_name} categories={activeCategories} onChange={(category_name) => setTransactionForm((current) => ({ ...current, category_name, category_id: findCategoryIdByName(categories, category_name) }))} />
+              <label className="field">Data<input type="date" value={transactionForm.date} onChange={(event) => setTransactionForm((current) => ({ ...current, date: event.target.value }))} required /></label>
+              <label className="field">Status<select value={transactionForm.status} onChange={(event) => setTransactionForm((current) => ({ ...current, status: event.target.value as TransactionForm["status"] }))}><option value="posted">Lançada</option><option value="planned">Agendada</option><option value="canceled">Cancelada</option></select></label>
+              <label className="field full-span">Observações<textarea rows={4} value={transactionForm.notes} onChange={(event) => setTransactionForm((current) => ({ ...current, notes: event.target.value }))} /></label>
+            </div>
+            <div className="modal-actions"><button className="btn btn-muted" type="button" onClick={() => setModal(null)}>Cancelar</button><button className="btn btn-primary" type="submit" disabled={loading}>{loading ? "Salvando..." : transactionForm.id ? "Salvar alterações" : "Salvar transação"}</button></div>
+          </form>
+        </div>
+      ) : null}
+
+      {modal === "recurring" ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <form className="modal-card" onSubmit={handleRecurringSubmit}>
+            <div className="modal-header">
+              <div><h2>{recurringForm.id ? "Editar regra recorrente" : "Nova regra recorrente"}</h2><p>Use a mesma estrutura do app atual e deixe os lançamentos entrarem automaticamente no período correto.</p></div>
+              <button className="icon-button" type="button" onClick={() => setModal(null)}>Fechar</button>
+            </div>
+            <div className="form-grid two-columns">
+              <label className="field full-span">Nome<input value={recurringForm.name} onChange={(event) => setRecurringForm((current) => ({ ...current, name: event.target.value }))} required /></label>
+              <label className="field">Tipo<select value={recurringForm.rule_type} onChange={(event) => setRecurringForm((current) => ({ ...current, rule_type: event.target.value as RecurringForm["rule_type"], target_type: event.target.value === "recurring_income" ? "account" : current.target_type }))}><option value="recurring_income">Receita recorrente</option><option value="recurring_expense">Gasto recorrente</option></select></label>
+              <label className="field">Valor<input type="number" min="0.01" step="0.01" value={recurringForm.amount} onChange={(event) => setRecurringForm((current) => ({ ...current, amount: event.target.value }))} required /></label>
+              <CategoryInputField id="recurring-category" value={recurringForm.category_name} categories={activeCategories} onChange={(category_name) => setRecurringForm((current) => ({ ...current, category_name, category_id: findCategoryIdByName(categories, category_name) }))} />
+              <label className="field">Frequência<select value={recurringForm.frequency} onChange={(event) => setRecurringForm((current) => ({ ...current, frequency: event.target.value as RecurringForm["frequency"] }))}><option value="monthly">Mensal</option><option value="weekly">Semanal</option><option value="quarterly">Trimestral</option><option value="yearly">Anual</option></select></label>
+              <label className="field">Data de início<input type="date" value={recurringForm.start_date} onChange={(event) => setRecurringForm((current) => ({ ...current, start_date: event.target.value }))} required /></label>
+              <label className="field">Data de fim<input type="date" value={recurringForm.end_date} onChange={(event) => setRecurringForm((current) => ({ ...current, end_date: event.target.value }))} /></label>
+              <label className={`field ${recurringForm.rule_type === "recurring_expense" ? "" : "hidden"}`}>Vínculo<select value={recurringForm.target_type} onChange={(event) => setRecurringForm((current) => ({ ...current, target_type: event.target.value as RecurringForm["target_type"] }))}><option value="account">Conta</option><option value="card">Cartão</option></select></label>
+              <label className={`field ${recurringForm.target_type === "card" && recurringForm.rule_type === "recurring_expense" ? "hidden" : ""}`}>Conta<select value={recurringForm.account_id} onChange={(event) => setRecurringForm((current) => ({ ...current, account_id: event.target.value }))} required={recurringForm.target_type !== "card" || recurringForm.rule_type === "recurring_income"}><option value="">Selecione</option>{activeAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
+              <label className={`field ${recurringForm.target_type === "card" && recurringForm.rule_type === "recurring_expense" ? "" : "hidden"}`}>Cartão<select value={recurringForm.credit_card_id} onChange={(event) => setRecurringForm((current) => ({ ...current, credit_card_id: event.target.value }))} required={recurringForm.target_type === "card" && recurringForm.rule_type === "recurring_expense"}><option value="">Selecione</option>{activeCards.map((card) => <option key={card.id} value={card.id}>{card.name}</option>)}</select></label>
+              <label className="field full-span">Observações<textarea rows={4} value={recurringForm.notes} onChange={(event) => setRecurringForm((current) => ({ ...current, notes: event.target.value }))} /></label>
+            </div>
+            <div className="modal-actions"><button className="btn btn-muted" type="button" onClick={() => setModal(null)}>Cancelar</button><button className="btn btn-primary" type="submit" disabled={loading}>{loading ? "Salvando..." : recurringForm.id ? "Salvar alterações" : "Salvar regra"}</button></div>
+          </form>
+        </div>
+      ) : null}
+
+      {modal === "debit" ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <form className="modal-card" onSubmit={handleDebitSubmit}>
+            <div className="modal-header">
+              <div><h2>Parcelar no débito</h2><p>O parcelamento vira um item principal expansível e cada parcela fica visível individualmente.</p></div>
+              <button className="icon-button" type="button" onClick={() => setModal(null)}>Fechar</button>
+            </div>
+            <div className="form-grid two-columns">
+              <label className="field full-span">Descrição<input value={debitForm.description} onChange={(event) => setDebitForm((current) => ({ ...current, description: event.target.value }))} required /></label>
+              <label className="field">Conta<select value={debitForm.account_id} onChange={(event) => setDebitForm((current) => ({ ...current, account_id: event.target.value }))} required><option value="">Selecione</option>{activeAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
+              <CategoryInputField id="debit-category" value={debitForm.category_name} categories={activeCategories} onChange={(category_name) => setDebitForm((current) => ({ ...current, category_name, category_id: findCategoryIdByName(categories, category_name) }))} />
+              <label className="field">Como informar o valor<select value={debitForm.amount_mode} onChange={(event) => setDebitForm((current) => ({ ...current, amount_mode: event.target.value as DebitInstallmentForm["amount_mode"] }))}><option value="total">Valor total</option><option value="installment">Valor de cada parcela</option></select></label>
+              <label className="field">{debitForm.amount_mode === "installment" ? "Valor de cada parcela" : "Valor total"}<input type="number" min="0.01" step="0.01" value={debitForm.amount_value} onChange={(event) => setDebitForm((current) => ({ ...current, amount_value: event.target.value }))} required /></label>
+              <label className="field">Parcelas<input type="number" min="2" step="1" value={debitForm.installments_count} onChange={(event) => setDebitForm((current) => ({ ...current, installments_count: event.target.value }))} required /></label>
+              <label className="field">Primeira parcela<input type="date" value={debitForm.first_date} onChange={(event) => setDebitForm((current) => ({ ...current, first_date: event.target.value }))} required /></label>
+              <p className="form-hint full-span">Resultado: {debitForm.installments_count || 0}x • total {currencyBRL(buildDebitInstallmentDrafts({ description: debitForm.description || "Parcela", amountMode: debitForm.amount_mode, amountValue: Number(debitForm.amount_value || 0), installmentsCount: Number(debitForm.installments_count || 0), firstDate: debitForm.first_date }).totalAmount)}</p>
+              <label className="field full-span">Observações<textarea rows={4} value={debitForm.notes} onChange={(event) => setDebitForm((current) => ({ ...current, notes: event.target.value }))} /></label>
+            </div>
+            <div className="modal-actions"><button className="btn btn-muted" type="button" onClick={() => setModal(null)}>Cancelar</button><button className="btn btn-primary" type="submit" disabled={loading}>{loading ? "Salvando..." : "Salvar parcelamento"}</button></div>
+          </form>
+        </div>
+      ) : null}
+
+      {modal === "debit-edit" ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <form className="modal-card" onSubmit={handleDebitEditSubmit}>
+            <div className="modal-header">
+              <div><h2>Editar parcela</h2><p>Edite apenas a parcela selecionada, sem recriar o parcelamento inteiro.</p></div>
+              <button className="icon-button" type="button" onClick={() => setModal(null)}>Fechar</button>
+            </div>
+            <div className="form-grid two-columns">
+              <label className="field full-span">Descrição<input value={debitEditForm.description} onChange={(event) => setDebitEditForm((current) => ({ ...current, description: event.target.value }))} required /></label>
+              <label className="field">Valor<input type="number" min="0.01" step="0.01" value={debitEditForm.amount} onChange={(event) => setDebitEditForm((current) => ({ ...current, amount: event.target.value }))} required /></label>
+              <label className="field">Data<input type="date" value={debitEditForm.due_date} onChange={(event) => setDebitEditForm((current) => ({ ...current, due_date: event.target.value }))} required /></label>
+              <CategoryInputField id="debit-edit-category" value={debitEditForm.category_name} categories={activeCategories} onChange={(category_name) => setDebitEditForm((current) => ({ ...current, category_name, category_id: findCategoryIdByName(categories, category_name) }))} />
+              <label className="field full-span">Observações<textarea rows={4} value={debitEditForm.notes} onChange={(event) => setDebitEditForm((current) => ({ ...current, notes: event.target.value }))} /></label>
+            </div>
+            <div className="modal-actions"><button className="btn btn-muted" type="button" onClick={() => setModal(null)}>Cancelar</button><button className="btn btn-primary" type="submit" disabled={loading}>{loading ? "Salvando..." : "Salvar parcela"}</button></div>
+          </form>
+        </div>
+      ) : null}
+    </div>
+  );
+}

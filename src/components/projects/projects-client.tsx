@@ -1,0 +1,701 @@
+"use client";
+
+import { CSSProperties, FormEvent, useMemo, useState } from "react";
+import type { ActivityLog, Profile, Project, ProjectItem, ProjectMovement, SharedItem } from "@/lib/domain/app-types";
+import { currencyBRL, datePt, percent } from "@/lib/domain/formatters";
+import { ColorPickerField } from "@/components/ui/color-picker-field";
+
+type Bundle = {
+  projects: Project[];
+  items: ProjectItem[];
+  movements: ProjectMovement[];
+  shares: SharedItem[];
+  activityLogs: ActivityLog[];
+  profiles: Profile[];
+  currentUserId: string;
+};
+
+type ProjectForm = {
+  id?: string;
+  name: string;
+  description: string;
+  icon: string;
+  theme_key: string;
+  image_url: string;
+  color: string;
+  status: "active" | "completed" | "archived" | "canceled";
+};
+
+type ItemForm = {
+  id?: string;
+  project_id: string;
+  name: string;
+  amount: string;
+  category: string;
+  status: "pending" | "completed" | "canceled";
+  notes: string;
+};
+
+type MovementForm = {
+  project_id: string;
+  type: "add" | "remove";
+  amount: string;
+  description: string;
+};
+
+const projectThemes = {
+  aurora: {
+    label: "Aurora",
+    icon: "✨",
+    image: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1200&q=80"
+  },
+  viagem: {
+    label: "Viagem",
+    icon: "🏖️",
+    image: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1200&q=80"
+  },
+  setup: {
+    label: "Setup",
+    icon: "🖥️",
+    image: "https://images.unsplash.com/photo-1496181133206-80ce9b88a853?auto=format&fit=crop&w=1200&q=80"
+  },
+  casa: {
+    label: "Casa",
+    icon: "🏠",
+    image: "https://images.unsplash.com/photo-1484154218962-a197022b5858?auto=format&fit=crop&w=1200&q=80"
+  },
+  carro: {
+    label: "Carro",
+    icon: "🚗",
+    image: "https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?auto=format&fit=crop&w=1200&q=80"
+  },
+  estudo: {
+    label: "Estudo",
+    icon: "📚",
+    image: "https://images.unsplash.com/photo-1491841550275-ad7854e35ca6?auto=format&fit=crop&w=1200&q=80"
+  },
+  evento: {
+    label: "Evento",
+    icon: "🎉",
+    image: "https://images.unsplash.com/photo-1519167758481-83f550bb49b3?auto=format&fit=crop&w=1200&q=80"
+  },
+  negocio: {
+    label: "Negócio",
+    icon: "💼",
+    image: "https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1200&q=80"
+  }
+} as const;
+
+type ThemeKey = keyof typeof projectThemes;
+
+const emptyProjectForm: ProjectForm = {
+  name: "",
+  description: "",
+  icon: "✨",
+  theme_key: "aurora",
+  image_url: "",
+  color: "",
+  status: "active"
+};
+
+const emptyItemForm: ItemForm = {
+  project_id: "",
+  name: "",
+  amount: "0",
+  category: "",
+  status: "pending",
+  notes: ""
+};
+
+const emptyMovementForm: MovementForm = {
+  project_id: "",
+  type: "add",
+  amount: "0",
+  description: ""
+};
+
+async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers || {})
+    }
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "Erro inesperado.");
+  return payload as T;
+}
+
+function metadataValue(record: { metadata?: Record<string, unknown> | null }, key: string, fallback = "") {
+  const value = record.metadata?.[key];
+  return typeof value === "string" ? value : fallback;
+}
+
+function getTheme(project: Project) {
+  const key = metadataValue(project, "theme_key", "aurora") as ThemeKey;
+  return projectThemes[key] || projectThemes.aurora;
+}
+
+function movementDelta(type: ProjectMovement["type"], amount: number) {
+  return type === "remove" ? -Math.abs(amount) : Math.abs(amount);
+}
+
+
+function accentStyle(color?: string | null): CSSProperties | undefined {
+  return color ? ({ "--item-accent": color } as CSSProperties) : undefined;
+}
+
+function profileName(profile?: Profile | null) {
+  if (!profile) return "Usuário";
+  return profile.display_name || profile.email || profile.id;
+}
+
+function activityLabel(log: ActivityLog, profile?: Profile) {
+  const actor = profileName(profile);
+  const amount = typeof log.new_value === "number" || typeof log.new_value === "string" ? currencyBRL(Number(log.new_value || 0)) : "";
+  switch (log.action_type) {
+    case "project_created": return `${actor} criou o projeto.`;
+    case "project_updated": return `${actor} atualizou o projeto.`;
+    case "project_deleted": return `${actor} arquivou o projeto.`;
+    case "project_share_added": return `${actor} compartilhou o projeto.`;
+    case "project_share_removed": return `${actor} removeu um participante.`;
+    case "project_item_created": return `${actor} criou um item planejado.`;
+    case "project_item_updated": return `${actor} atualizou um item.`;
+    case "project_item_toggled": return `${actor} alterou o status de um item.`;
+    case "project_item_deleted": return `${actor} excluiu um item.`;
+    case "project_contribution_added": return `${actor} adicionou ${amount} ao caixa do projeto.`;
+    case "project_contribution_removed": return `${actor} removeu ${amount} do caixa do projeto.`;
+    case "project_contribution_deleted": return `${actor} excluiu uma movimentação.`;
+    default: return `${actor} registrou uma atividade.`;
+  }
+}
+
+export function ProjectsClient(props: Bundle) {
+  const [bundle, setBundle] = useState<Bundle>(props);
+  const [selectedProjectId, setSelectedProjectId] = useState(props.projects[0]?.id || "");
+  const [tab, setTab] = useState<"checklist" | "analytics" | "financas" | "historico">("checklist");
+  const [modal, setModal] = useState<"project" | "item" | "movement" | "share" | null>(null);
+  const [projectForm, setProjectForm] = useState<ProjectForm>(emptyProjectForm);
+  const [itemForm, setItemForm] = useState<ItemForm>(emptyItemForm);
+  const [movementForm, setMovementForm] = useState<MovementForm>(emptyMovementForm);
+  const [shareSearch, setShareSearch] = useState("");
+  const [shareRole, setShareRole] = useState<"viewer" | "editor">("editor");
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  const selectedProject = bundle.projects.find((project) => project.id === selectedProjectId) || bundle.projects[0] || null;
+  const selectedItems = useMemo(() => selectedProject ? bundle.items.filter((item) => item.project_id === selectedProject.id) : [], [bundle.items, selectedProject]);
+  const selectedMovements = useMemo(() => selectedProject ? bundle.movements.filter((movement) => movement.project_id === selectedProject.id) : [], [bundle.movements, selectedProject]);
+  const selectedShares = useMemo(() => selectedProject ? bundle.shares.filter((share) => share.item_id === selectedProject.id) : [], [bundle.shares, selectedProject]);
+  const selectedLogs = useMemo(() => {
+    if (!selectedProject) return [];
+    return bundle.activityLogs.filter((log) => log.entity_id === selectedProject.id || log.metadata?.project_id === selectedProject.id);
+  }, [bundle.activityLogs, selectedProject]);
+
+  const profileById = useMemo(() => new Map(bundle.profiles.map((profile) => [profile.id, profile])), [bundle.profiles]);
+  const canManageSharing = selectedProject?.owner_id === bundle.currentUserId;
+  const canEditSelected = canManageSharing || selectedShares.some((share) => share.user_id === bundle.currentUserId && share.role === "editor");
+
+  const summary = useMemo(() => {
+    const activeItems = selectedItems.filter((item) => item.status !== "canceled");
+    const totalEstimated = activeItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const totalDone = activeItems.filter((item) => item.status === "completed").reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const cashBalance = selectedMovements.reduce((sum, movement) => sum + movementDelta(movement.type, Number(movement.amount || 0)), 0);
+    const progress = totalEstimated > 0 ? Math.min(100, (totalDone / totalEstimated) * 100) : 0;
+    return {
+      totalEstimated,
+      totalDone,
+      cashBalance,
+      progress,
+      pendingCount: activeItems.filter((item) => item.status === "pending").length,
+      completedCount: activeItems.filter((item) => item.status === "completed").length,
+      missingCash: Math.max(totalEstimated - cashBalance, 0)
+    };
+  }, [selectedItems, selectedMovements]);
+
+  async function reload() {
+    const next = await requestJson<Omit<Bundle, "currentUserId">>("/api/projects");
+    setBundle({ ...next, currentUserId: bundle.currentUserId });
+  }
+
+  function openProjectCreate() {
+    setProjectForm(emptyProjectForm);
+    setModal("project");
+    setError("");
+    setMessage("");
+  }
+
+  function openProjectEdit(project: Project) {
+    setProjectForm({
+      id: project.id,
+      name: project.name,
+      description: project.description || "",
+      icon: metadataValue(project, "icon", getTheme(project).icon),
+      theme_key: metadataValue(project, "theme_key", "aurora"),
+      image_url: project.image_url || "",
+      color: project.color || "",
+      status: project.status
+    });
+    setModal("project");
+  }
+
+  function openItemCreate() {
+    if (!selectedProject) return;
+    setItemForm({ ...emptyItemForm, project_id: selectedProject.id });
+    setModal("item");
+  }
+
+  function openItemEdit(item: ProjectItem) {
+    setItemForm({
+      id: item.id,
+      project_id: item.project_id,
+      name: item.name,
+      amount: String(item.amount || 0),
+      category: metadataValue(item, "category"),
+      status: item.status,
+      notes: metadataValue(item, "notes")
+    });
+    setModal("item");
+  }
+
+  function openMovementCreate(type: "add" | "remove" = "add") {
+    if (!selectedProject) return;
+    setMovementForm({ ...emptyMovementForm, project_id: selectedProject.id, type });
+    setModal("movement");
+  }
+
+  async function submitProject(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    setMessage("");
+    try {
+      const theme = projectThemes[projectForm.theme_key as ThemeKey] || projectThemes.aurora;
+      await requestJson("/api/projects", {
+        method: projectForm.id ? "PATCH" : "POST",
+        body: JSON.stringify({
+          ...projectForm,
+          image_url: projectForm.image_url || theme.image,
+          icon: projectForm.icon || theme.icon
+        })
+      });
+      await reload();
+      setModal(null);
+      setMessage(projectForm.id ? "Projeto atualizado." : "Projeto criado.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível salvar.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    setMessage("");
+    try {
+      await requestJson("/api/projects/items", {
+        method: itemForm.id ? "PATCH" : "POST",
+        body: JSON.stringify({ ...itemForm, amount: Number(itemForm.amount || 0) })
+      });
+      await reload();
+      setModal(null);
+      setMessage(itemForm.id ? "Item atualizado." : "Item criado.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível salvar o item.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitMovement(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    setMessage("");
+    try {
+      await requestJson("/api/projects/movements", {
+        method: "POST",
+        body: JSON.stringify({ ...movementForm, amount: Number(movementForm.amount || 0) })
+      });
+      await reload();
+      setModal(null);
+      setMessage(movementForm.type === "add" ? "Aporte registrado." : "Retirada registrada.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível registrar.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteProject(project: Project) {
+    if (!window.confirm(`Arquivar projeto\n\nDeseja arquivar "${project.name}"?`)) return;
+    setLoading(true);
+    try {
+      await requestJson("/api/projects", { method: "DELETE", body: JSON.stringify({ id: project.id }) });
+      await reload();
+      setSelectedProjectId("");
+      setMessage("Projeto arquivado.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível arquivar.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteItem(item: ProjectItem) {
+    if (!window.confirm("Excluir item planejado?")) return;
+    setLoading(true);
+    try {
+      await requestJson("/api/projects/items", { method: "DELETE", body: JSON.stringify({ id: item.id, project_id: item.project_id }) });
+      await reload();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível excluir.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function toggleItem(item: ProjectItem) {
+    await requestJson("/api/projects/items", {
+      method: "PATCH",
+      body: JSON.stringify({
+        id: item.id,
+        project_id: item.project_id,
+        name: item.name,
+        amount: Number(item.amount || 0),
+        category: metadataValue(item, "category"),
+        notes: metadataValue(item, "notes"),
+        status: item.status === "completed" ? "pending" : "completed"
+      })
+    });
+    await reload();
+  }
+
+  async function deleteMovement(movement: ProjectMovement) {
+    if (!window.confirm("Excluir movimentação do projeto?")) return;
+    setLoading(true);
+    try {
+      await requestJson("/api/projects/movements", { method: "DELETE", body: JSON.stringify({ id: movement.id, project_id: movement.project_id }) });
+      await reload();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível excluir.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function toggleShare(profile: Profile, exists: boolean) {
+    if (!selectedProject) return;
+    setLoading(true);
+    setError("");
+    try {
+      await requestJson("/api/projects/sharing", {
+        method: "POST",
+        body: JSON.stringify({
+          project_id: selectedProject.id,
+          user_id: profile.id,
+          role: shareRole,
+          action: exists ? "remove" : "add"
+        })
+      });
+      await reload();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível alterar o compartilhamento.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const filteredProfiles = bundle.profiles
+    .filter((profile) => profile.id !== bundle.currentUserId)
+    .filter((profile) => {
+      const term = shareSearch.trim().toLowerCase();
+      if (!term) return true;
+      return `${profile.display_name || ""} ${profile.email || ""}`.toLowerCase().includes(term);
+    });
+
+  return (
+    <div className="grid">
+      <header className="page-header">
+        <div>
+          <h1 className="page-title">Projetos</h1>
+          <p className="page-caption">Itens planejados, caixa do projeto, participantes e histórico de atividade.</p>
+        </div>
+        <button className="btn btn-primary" type="button" onClick={openProjectCreate}>Novo projeto</button>
+      </header>
+
+      {error ? <div className="alert alert-error">{error}</div> : null}
+      {message ? <div className="alert alert-success">{message}</div> : null}
+
+      <section className="project-layout">
+        <aside className="project-sidebar panel">
+          <div className="section-heading compact-heading">
+            <div>
+              <h2>Projetos</h2>
+              <p>{bundle.projects.length} cadastrados</p>
+            </div>
+          </div>
+          <div className="mini-list">
+            {bundle.projects.map((project) => {
+              const theme = getTheme(project);
+              const itemCount = bundle.items.filter((item) => item.project_id === project.id).length;
+              const isOwner = project.owner_id === bundle.currentUserId;
+              return (
+                <button
+                  key={project.id}
+                  className={`mini-list-item accent-list-item ${selectedProject?.id === project.id ? "active" : ""}`}
+                  style={accentStyle(project.color)}
+                  type="button"
+                  onClick={() => setSelectedProjectId(project.id)}
+                >
+                  <span className="mini-icon">{metadataValue(project, "icon", theme.icon)}</span>
+                  <span><strong>{project.name}</strong><small>{isOwner ? "Seu projeto" : "Compartilhado"} • {itemCount} itens</small></span>
+                </button>
+              );
+            })}
+            {!bundle.projects.length ? <div className="empty-state">Nenhum projeto cadastrado.</div> : null}
+          </div>
+        </aside>
+
+        <div className="grid">
+          {selectedProject ? (
+            <>
+              <section className="project-hero" style={{ "--item-accent": selectedProject.color || "#2563eb", backgroundImage: `linear-gradient(135deg, color-mix(in srgb, ${selectedProject.color || "#2563eb"} 72%, rgba(15,23,42,.88)), rgba(15,23,42,.50)), url(${selectedProject.image_url || getTheme(selectedProject).image})` } as CSSProperties}>
+                <div>
+                  <span className="badge badge-light">{getTheme(selectedProject).label} {metadataValue(selectedProject, "icon", getTheme(selectedProject).icon)}</span>
+                  <h2>{selectedProject.name}</h2>
+                  <p>{selectedProject.description || "Planejamento organizado por itens, aportes e progresso."}</p>
+                  <div className="hero-meta">
+                    <span>{canManageSharing ? "Dono" : "Participante"}</span>
+                    <span>{selectedShares.length} compartilhamento(s)</span>
+                    <span>Status: {selectedProject.status}</span>
+                  </div>
+                </div>
+                <div className="hero-actions">
+                  {canEditSelected ? <button className="btn btn-muted" type="button" onClick={() => openProjectEdit(selectedProject)}>Editar</button> : null}
+                  {canManageSharing ? <button className="btn btn-muted" type="button" onClick={() => setModal("share")}>Compartilhar</button> : null}
+                  {canManageSharing ? <button className="btn btn-danger" type="button" onClick={() => deleteProject(selectedProject)}>Arquivar</button> : null}
+                </div>
+              </section>
+
+              <section className="stats-grid project-stats-grid">
+                <article className="stat-card"><div className="stat-label">Total estimado</div><div className="stat-value">{currencyBRL(summary.totalEstimated)}</div></article>
+                <article className="stat-card"><div className="stat-label">Em caixa</div><div className="stat-value">{currencyBRL(summary.cashBalance)}</div></article>
+                <article className="stat-card"><div className="stat-label">Progresso dos itens</div><div className="stat-value">{percent(summary.progress)}</div></article>
+                <article className="stat-card"><div className="stat-label">Falta cobrir</div><div className="stat-value">{currencyBRL(summary.missingCash)}</div></article>
+              </section>
+
+              <section className="panel">
+                <div className="tabs-row">
+                  {["checklist", "analytics", "financas", "historico"].map((tabName) => (
+                    <button key={tabName} className={`tab-button ${tab === tabName ? "active" : ""}`} type="button" onClick={() => setTab(tabName as typeof tab)}>
+                      {tabName === "checklist" ? "Checklist" : tabName === "analytics" ? "Analytics" : tabName === "financas" ? "Finanças" : "Histórico"}
+                    </button>
+                  ))}
+                </div>
+
+                {tab === "checklist" ? (
+                  <div className="grid">
+                    <div className="section-heading">
+                      <div><h2>Itens planejados</h2><p>Itens do projeto, valores e status.</p></div>
+                      {canEditSelected ? <button className="btn btn-primary" type="button" onClick={openItemCreate}>Novo item</button> : null}
+                    </div>
+                    {selectedItems.length ? (
+                      <div className="table-scroll">
+                        <table className="table">
+                          <thead><tr><th>Status</th><th>Item</th><th>Categoria</th><th>Valor</th><th>Ações</th></tr></thead>
+                          <tbody>
+                            {selectedItems.map((item) => (
+                              <tr key={item.id}>
+                                <td><span className={`badge ${item.status === "completed" ? "badge-success" : ""}`}>{item.status === "completed" ? "Concluído" : "Pendente"}</span></td>
+                                <td>{item.name}</td>
+                                <td>{metadataValue(item, "category") || "—"}</td>
+                                <td>{currencyBRL(item.amount)}</td>
+                                <td className="table-actions">
+                                  {canEditSelected ? <button className="link-button" type="button" onClick={() => toggleItem(item)}>{item.status === "completed" ? "Reabrir" : "Concluir"}</button> : null}
+                                  {canEditSelected ? <button className="link-button" type="button" onClick={() => openItemEdit(item)}>Editar</button> : null}
+                                  {canEditSelected ? <button className="link-button danger-text" type="button" onClick={() => deleteItem(item)}>Excluir</button> : null}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : <div className="empty-state">Nenhum item planejado neste projeto.</div>}
+                  </div>
+                ) : null}
+
+                {tab === "analytics" ? (
+                  <ProjectAnalytics items={selectedItems} movements={selectedMovements} />
+                ) : null}
+
+                {tab === "financas" ? (
+                  <div className="grid">
+                    <div className="section-heading">
+                      <div><h2>Finanças do projeto</h2><p>Aportes e retiradas separados das contas principais por enquanto.</p></div>
+                      <div className="header-actions">
+                        {canEditSelected ? <button className="btn btn-primary" type="button" onClick={() => openMovementCreate("add")}>+ Aporte</button> : null}
+                        {canEditSelected ? <button className="btn btn-muted" type="button" onClick={() => openMovementCreate("remove")}>- Retirada</button> : null}
+                      </div>
+                    </div>
+                    <div className="table-scroll">
+                      <table className="table">
+                        <thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Valor</th><th>Quem fez</th><th>Ações</th></tr></thead>
+                        <tbody>
+                          {selectedMovements.map((movement) => (
+                            <tr key={movement.id}>
+                              <td>{datePt((movement.created_at || "").slice(0, 10))}</td>
+                              <td>{movement.type === "add" ? "Aporte" : "Retirada"}</td>
+                              <td>{movement.description || "—"}</td>
+                              <td>{currencyBRL(movement.amount)}</td>
+                              <td>{profileName(profileById.get(movement.actor_id || ""))}</td>
+                              <td>{canEditSelected ? <button className="link-button danger-text" type="button" onClick={() => deleteMovement(movement)}>Excluir</button> : null}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {!selectedMovements.length ? <div className="empty-state">Nenhuma movimentação registrada.</div> : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                {tab === "historico" ? (
+                  <ActivityFeed logs={selectedLogs} profileById={profileById} />
+                ) : null}
+              </section>
+            </>
+          ) : (
+            <section className="panel"><div className="empty-state">Crie seu primeiro projeto para começar.</div></section>
+          )}
+        </div>
+      </section>
+
+      {modal === "project" ? (
+        <Modal title={projectForm.id ? "Editar projeto" : "Novo projeto"} subtitle="Nome, descrição, ícone e tema visual do projeto." onClose={() => setModal(null)}>
+          <form className="form-grid two-columns" onSubmit={submitProject}>
+            <label className="field full-span"><span>Nome</span><input value={projectForm.name} onChange={(e) => setProjectForm({ ...projectForm, name: e.target.value })} required /></label>
+            <label className="field"><span>Ícone</span><input value={projectForm.icon} onChange={(e) => setProjectForm({ ...projectForm, icon: e.target.value })} /></label>
+            <label className="field"><span>Tema visual</span><select value={projectForm.theme_key} onChange={(e) => setProjectForm({ ...projectForm, theme_key: e.target.value })}>{Object.entries(projectThemes).map(([key, theme]) => <option key={key} value={key}>{theme.label}</option>)}</select></label>
+            <label className="field"><span>Status</span><select value={projectForm.status} onChange={(e) => setProjectForm({ ...projectForm, status: e.target.value as ProjectForm["status"] })}><option value="active">Ativo</option><option value="completed">Concluído</option><option value="archived">Arquivado</option><option value="canceled">Cancelado</option></select></label>
+            <ColorPickerField
+              label="Cor do projeto"
+              value={projectForm.color}
+              onChange={(color) => setProjectForm({ ...projectForm, color })}
+              helper="Use junto do tema visual para destacar o projeto."
+            />
+            <label className="field full-span"><span>Imagem de capa opcional</span><input value={projectForm.image_url} onChange={(e) => setProjectForm({ ...projectForm, image_url: e.target.value })} placeholder="URL da imagem" /></label>
+            <label className="field full-span"><span>Descrição</span><textarea rows={4} value={projectForm.description} onChange={(e) => setProjectForm({ ...projectForm, description: e.target.value })} /></label>
+            <div className="modal-actions full-span"><button className="btn btn-muted" type="button" onClick={() => setModal(null)}>Cancelar</button><button className="btn btn-primary" disabled={loading} type="submit">Salvar projeto</button></div>
+          </form>
+        </Modal>
+      ) : null}
+
+      {modal === "item" ? (
+        <Modal title={itemForm.id ? "Editar item" : "Novo item"} subtitle="Item planejado do projeto." onClose={() => setModal(null)}>
+          <form className="form-grid two-columns" onSubmit={submitItem}>
+            <label className="field full-span"><span>Nome do item</span><input value={itemForm.name} onChange={(e) => setItemForm({ ...itemForm, name: e.target.value })} required /></label>
+            <label className="field"><span>Valor</span><input type="number" step="0.01" min="0" value={itemForm.amount} onChange={(e) => setItemForm({ ...itemForm, amount: e.target.value })} required /></label>
+            <label className="field"><span>Categoria</span><input value={itemForm.category} onChange={(e) => setItemForm({ ...itemForm, category: e.target.value })} placeholder="Ex.: Hardware" /></label>
+            <label className="field"><span>Status</span><select value={itemForm.status} onChange={(e) => setItemForm({ ...itemForm, status: e.target.value as ItemForm["status"] })}><option value="pending">Pendente</option><option value="completed">Concluído</option><option value="canceled">Cancelado</option></select></label>
+            <label className="field full-span"><span>Observações</span><textarea rows={3} value={itemForm.notes} onChange={(e) => setItemForm({ ...itemForm, notes: e.target.value })} /></label>
+            <div className="modal-actions full-span"><button className="btn btn-muted" type="button" onClick={() => setModal(null)}>Cancelar</button><button className="btn btn-primary" disabled={loading} type="submit">Salvar item</button></div>
+          </form>
+        </Modal>
+      ) : null}
+
+      {modal === "movement" ? (
+        <Modal title={movementForm.type === "add" ? "Novo aporte" : "Nova retirada"} subtitle="Movimento financeiro dentro do projeto." onClose={() => setModal(null)}>
+          <form className="form-grid two-columns" onSubmit={submitMovement}>
+            <label className="field"><span>Tipo</span><select value={movementForm.type} onChange={(e) => setMovementForm({ ...movementForm, type: e.target.value as MovementForm["type"] })}><option value="add">Aporte</option><option value="remove">Retirada</option></select></label>
+            <label className="field"><span>Valor</span><input type="number" step="0.01" min="0.01" value={movementForm.amount} onChange={(e) => setMovementForm({ ...movementForm, amount: e.target.value })} required /></label>
+            <label className="field full-span"><span>Descrição</span><input value={movementForm.description} onChange={(e) => setMovementForm({ ...movementForm, description: e.target.value })} placeholder="Ex.: aporte do mês" /></label>
+            <div className="modal-actions full-span"><button className="btn btn-muted" type="button" onClick={() => setModal(null)}>Cancelar</button><button className="btn btn-primary" disabled={loading} type="submit">Registrar</button></div>
+          </form>
+        </Modal>
+      ) : null}
+
+      {modal === "share" && selectedProject ? (
+        <Modal title="Compartilhar projeto" subtitle="Somente o dono pode adicionar ou remover participantes." onClose={() => setModal(null)}>
+          <div className="form-grid">
+            <div className="filters-panel">
+              <label className="field"><span>Buscar usuário</span><input value={shareSearch} onChange={(e) => setShareSearch(e.target.value)} placeholder="Nome ou e-mail" /></label>
+              <label className="field"><span>Permissão</span><select value={shareRole} onChange={(e) => setShareRole(e.target.value as "viewer" | "editor")}><option value="editor">Editor</option><option value="viewer">Leitor</option></select></label>
+            </div>
+            <div className="share-list">
+              {filteredProfiles.map((profile) => {
+                const share = selectedShares.find((item) => item.user_id === profile.id);
+                return (
+                  <div className="share-row" key={profile.id}>
+                    <div><strong>{profileName(profile)}</strong><small>{profile.email || "sem e-mail"}{share ? ` • ${share.role}` : ""}</small></div>
+                    <button className={`btn ${share ? "btn-danger" : "btn-muted"}`} type="button" onClick={() => toggleShare(profile, !!share)}>{share ? "Remover" : "Adicionar"}</button>
+                  </div>
+                );
+              })}
+              {!filteredProfiles.length ? <div className="empty-state">Nenhum usuário encontrado.</div> : null}
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+    </div>
+  );
+}
+
+function ProjectAnalytics({ items, movements }: { items: ProjectItem[]; movements: ProjectMovement[] }) {
+  const byCategory = Object.entries(items.reduce<Record<string, number>>((acc, item) => {
+    if (item.status === "canceled") return acc;
+    const key = metadataValue(item, "category", "Sem categoria") || "Sem categoria";
+    acc[key] = (acc[key] || 0) + Number(item.amount || 0);
+    return acc;
+  }, {})).sort((a, b) => b[1] - a[1]);
+
+  const byType = movements.reduce((acc, movement) => {
+    acc[movement.type] = (acc[movement.type] || 0) + Number(movement.amount || 0);
+    return acc;
+  }, {} as Record<string, number>);
+
+  return (
+    <div className="analytics-grid">
+      <div className="surface-soft-card">
+        <h3>Distribuição por categoria</h3>
+        {byCategory.length ? byCategory.map(([name, amount]) => <div className="split-row" key={name}><span>{name}</span><strong>{currencyBRL(amount)}</strong></div>) : <p className="muted-text">Sem itens suficientes.</p>}
+      </div>
+      <div className="surface-soft-card">
+        <h3>Movimentos de caixa</h3>
+        <div className="split-row"><span>Aportes</span><strong>{currencyBRL(byType.add || 0)}</strong></div>
+        <div className="split-row"><span>Retiradas</span><strong>{currencyBRL(byType.remove || 0)}</strong></div>
+      </div>
+    </div>
+  );
+}
+
+function ActivityFeed({ logs, profileById }: { logs: ActivityLog[]; profileById: Map<string, Profile> }) {
+  if (!logs.length) return <div className="empty-state">Nenhuma atividade registrada ainda.</div>;
+  return (
+    <div className="activity-feed">
+      {logs.map((log) => (
+        <div className="activity-item" key={log.id}>
+          <strong>{activityLabel(log, profileById.get(log.actor_id || ""))}</strong>
+          <span>{datePt((log.created_at || "").slice(0, 10))}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Modal({ title, subtitle, onClose, children }: { title: string; subtitle: string; onClose: () => void; children: React.ReactNode }) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <div className="modal-card">
+        <div className="modal-header">
+          <div><h2>{title}</h2><p>{subtitle}</p></div>
+          <button className="icon-button" type="button" onClick={onClose}>Fechar</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
