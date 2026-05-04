@@ -1,15 +1,18 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+
 import { getApiContext, jsonError, parseJson } from "@/lib/http/api";
 import { buildCurrentFinancialContext, loadAiChatHistory } from "@/lib/server/financial-snapshot";
 
-const scenarioSchema = z.object({
-  description: z.string().optional(),
-  amount: z.union([z.string(), z.number()]).optional(),
-  paymentMethod: z.enum(["cash", "credit", "debit_installment"]).optional(),
-  installments: z.union([z.string(), z.number()]).optional(),
-  priority: z.enum(["baixa", "media", "alta"]).optional()
-}).optional();
+const scenarioSchema = z
+  .object({
+    description: z.string().optional(),
+    amount: z.union([z.string(), z.number()]).optional(),
+    paymentMethod: z.enum(["cash", "credit", "debit_installment"]).optional(),
+    installments: z.union([z.string(), z.number()]).optional(),
+    priority: z.enum(["baixa", "media", "alta"]).optional()
+  })
+  .optional();
 
 const bodySchema = z.object({
   message: z.string().trim().min(1, "Digite uma pergunta."),
@@ -39,12 +42,35 @@ function systemPrompt(intent = "general") {
 function getLLMConfig() {
   const apiKey = process.env.GROQ_API_KEY || process.env.LLM_API_KEY;
   const baseUrl = process.env.LLM_BASE_URL || "https://api.groq.com/openai/v1";
-  const model = process.env.GROQ_MODEL || process.env.LLM_MODEL || "llama-3.3-70b-versatile";
+
+  const configuredModel = process.env.GROQ_MODEL || process.env.LLM_MODEL;
+  const deprecatedModels = new Set(["llama-3.1-70b-versatile", "llama3-70b-8192"]);
+
+  const model = !configuredModel || deprecatedModels.has(configuredModel)
+    ? "llama-3.3-70b-versatile"
+    : configuredModel;
+
   return { apiKey, baseUrl, model };
+}
+
+function extractAiErrorMessage(raw: string) {
+  try {
+    const parsed = JSON.parse(raw);
+    const message = parsed?.error?.message || parsed?.message;
+
+    if (typeof message === "string") {
+      return message;
+    }
+  } catch {
+    // mantém fallback abaixo
+  }
+
+  return raw;
 }
 
 export async function GET(request: Request) {
   const context = await getApiContext();
+
   if ("error" in context) return context.error;
 
   const url = new URL(request.url);
@@ -56,6 +82,7 @@ export async function GET(request: Request) {
       buildCurrentFinancialContext(context.supabase, context.user.id, { month, referenceDate }),
       loadAiChatHistory(context.supabase, context.user.id)
     ]);
+
     return NextResponse.json({ data: messages, context: aiContext });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Não foi possível carregar o consultor IA.", 500);
@@ -64,14 +91,17 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const context = await getApiContext();
+
   if ("error" in context) return context.error;
 
   try {
     const payload = await parseJson(request, bodySchema);
+
     const { aiContext } = await buildCurrentFinancialContext(context.supabase, context.user.id, {
       month: payload.month,
       referenceDate: payload.referenceDate
     });
+
     const history = await loadAiChatHistory(context.supabase, context.user.id, 10);
     const { apiKey, baseUrl, model } = getLLMConfig();
 
@@ -93,6 +123,7 @@ export async function POST(request: Request) {
       content: payload.message,
       context: requestContext
     });
+
     if (userInsertError) return jsonError(userInsertError.message, 500);
 
     const messages = [
@@ -123,7 +154,12 @@ export async function POST(request: Request) {
 
     if (!response.ok) {
       const text = await response.text();
-      return jsonError(text || "Erro ao chamar a IA.", 502);
+      const errorMessage = extractAiErrorMessage(text);
+
+      return jsonError(
+        `Não foi possível consultar a IA agora. Detalhe: ${errorMessage || "erro no provedor de IA."}`,
+        502
+      );
     }
 
     const data = await response.json();
@@ -133,11 +169,18 @@ export async function POST(request: Request) {
       owner_id: context.user.id,
       role: "assistant",
       content: answer,
-      context: { model, intent: payload.intent || "general", scenario: payload.scenario || null, reference: aiContext.reference || null }
+      context: {
+        model,
+        intent: payload.intent || "general",
+        scenario: payload.scenario || null,
+        reference: aiContext.reference || null
+      }
     });
+
     if (assistantInsertError) return jsonError(assistantInsertError.message, 500);
 
     const freshHistory = await loadAiChatHistory(context.supabase, context.user.id);
+
     return NextResponse.json({ ok: true, answer, data: freshHistory });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Não foi possível consultar a IA.", 500);

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+
 import { getApiContext, jsonError, mergeMetadata, parseJson } from "@/lib/http/api";
 
 const accountSchema = z.object({
@@ -12,10 +13,13 @@ const accountSchema = z.object({
   notes: z.string().trim().optional().nullable()
 });
 
-const deleteSchema = z.object({ id: z.string().uuid("Conta inválida.") });
+const deleteSchema = z.object({
+  id: z.string().uuid("Conta inválida.")
+});
 
 export async function GET() {
   const context = await getApiContext();
+
   if ("error" in context) return context.error;
 
   const { data, error } = await context.supabase
@@ -26,15 +30,18 @@ export async function GET() {
     .order("created_at", { ascending: true });
 
   if (error) return jsonError(error.message, 500);
+
   return NextResponse.json({ data: data || [] });
 }
 
 export async function POST(request: Request) {
   const context = await getApiContext();
+
   if ("error" in context) return context.error;
 
   try {
     const payload = await parseJson(request, accountSchema);
+
     const record = {
       owner_id: context.user.id,
       name: payload.name,
@@ -49,7 +56,9 @@ export async function POST(request: Request) {
     };
 
     const { data, error } = await context.supabase.from("accounts").insert(record).select("*").single();
+
     if (error) return jsonError(error.message, 500);
+
     return NextResponse.json({ data }, { status: 201 });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Não foi possível salvar a conta.");
@@ -58,10 +67,12 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   const context = await getApiContext();
+
   if ("error" in context) return context.error;
 
   try {
     const payload = await parseJson(request, accountSchema.extend({ id: z.string().uuid("Conta inválida.") }));
+
     const { data: existing, error: existingError } = await context.supabase
       .from("accounts")
       .select("*")
@@ -89,6 +100,7 @@ export async function PATCH(request: Request) {
       .single();
 
     if (error) return jsonError(error.message, 500);
+
     return NextResponse.json({ data });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Não foi possível atualizar a conta.");
@@ -97,18 +109,22 @@ export async function PATCH(request: Request) {
 
 export async function DELETE(request: Request) {
   const context = await getApiContext();
+
   if ("error" in context) return context.error;
 
   try {
     const payload = await parseJson(request, deleteSchema);
-    const { error } = await context.supabase
-      .from("accounts")
-      .update({ is_deleted: true, is_archived: true })
-      .eq("id", payload.id)
-      .eq("owner_id", context.user.id);
+
+    const { error } = await context.supabase.rpc("safe_delete_account", {
+      target_account_id: payload.id
+    });
 
     if (error) return jsonError(error.message, 500);
-    return NextResponse.json({ ok: true });
+
+    return NextResponse.json({
+      ok: true,
+      behavior: "account_archived_history_preserved"
+    });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Não foi possível excluir a conta.");
   }

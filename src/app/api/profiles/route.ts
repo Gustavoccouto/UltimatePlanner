@@ -1,19 +1,40 @@
 import { NextResponse } from "next/server";
+
 import { getApiContext, jsonError } from "@/lib/http/api";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+
+function normalizeSearch(value: string | null) {
+  return (value || "").trim().toLowerCase();
+}
 
 export async function GET(request: Request) {
   const context = await getApiContext();
-  if ("error" in context) return context.error;
+
+  if ("error" in context) {
+    return context.error;
+  }
 
   const { searchParams } = new URL(request.url);
-  const query = (searchParams.get("q") || "").trim();
+  const query = normalizeSearch(searchParams.get("q"));
 
-  const requestBuilder = query.length >= 2
-    ? context.supabase.rpc("search_profiles_for_sharing", { search_text: query })
-    : context.supabase.rpc("visible_profiles_for_user");
+  if (query.length < 2) {
+    return NextResponse.json({ data: [] });
+  }
 
-  const { data, error } = await requestBuilder;
+  try {
+    const admin = createSupabaseAdminClient();
 
-  if (error) return jsonError(error.message, 500);
-  return NextResponse.json({ data: data || [] });
+    const { data, error } = await admin.rpc("search_profiles_for_sharing", {
+      search_text: query,
+      requester_id: context.user.id
+    });
+
+    if (error) {
+      return jsonError(error.message, 500);
+    }
+
+    return NextResponse.json({ data: data || [] });
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "Não foi possível buscar usuários.", 500);
+  }
 }
