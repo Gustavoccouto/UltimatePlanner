@@ -6,29 +6,53 @@ export default function LoginPage() {
       <section className="auth-hero-panel" aria-label="Apresentação do UltimatePlanner">
         <div className="brand auth-brand">
           <div className="brand-mark" aria-hidden="true" />
+
           <div>
             <p className="brand-title">UltimatePlanner</p>
-            <p className="brand-caption">Finanças & Planejamento</p>
+            <p className="brand-caption">Finanças, metas e planejamento</p>
           </div>
         </div>
+
         <div className="auth-hero-copy">
-          <span className="eyebrow">Migração web</span>
-          <h1>Seu app financeiro, agora com backend real.</h1>
+          <span className="eyebrow">Seu painel financeiro pessoal</span>
+
+          <h1>Organize sua vida financeira com clareza, controle e visão de futuro.</h1>
+
           <p>
-            Mesma lógica de contas, cartões, projetos, metas e investimentos, preservando a identidade visual premium do projeto original.
+            O UltimatePlanner reúne contas, cartões, transações, metas, projetos, investimentos e recorrências em um
+            único ambiente. Acompanhe seu dinheiro, planeje decisões importantes e mantenha tudo separado por usuário de
+            forma segura.
           </p>
         </div>
+
         <div className="auth-feature-grid">
-          <div><strong>Supabase</strong><span>Dados por usuário</span></div>
-          <div><strong>Next.js</strong><span>App Router</span></div>
-          <div><strong>Mobile</strong><span>Menu adaptado</span></div>
+          <div>
+            <strong>Controle</strong>
+            <span>Contas, cartões e gastos</span>
+          </div>
+
+          <div>
+            <strong>Planejamento</strong>
+            <span>Metas, projetos e recorrências</span>
+          </div>
+
+          <div>
+            <strong>Visão</strong>
+            <span>Investimentos e projeções</span>
+          </div>
         </div>
       </section>
 
       <section className="auth-card auth-card-premium">
-        <span className="eyebrow">Acesso</span>
+        <span className="eyebrow">Acesso seguro</span>
+
         <h2 className="auth-title">Entrar no UltimatePlanner</h2>
-        <p className="auth-subtitle">Use o e-mail e senha criados no Supabase Auth. Cada usuário acessa apenas seus próprios dados e itens compartilhados.</p>
+
+        <p className="auth-subtitle">
+          Acesse sua área pessoal para visualizar seus dados financeiros, acompanhar sua evolução e atualizar seu
+          planejamento. Cada usuário vê apenas suas próprias informações e os itens compartilhados com ele.
+        </p>
+
         <LoginForm />
       </section>
     </main>
