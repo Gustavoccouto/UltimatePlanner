@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
+
 import "./globals.css";
+import "./ux-polish.css";
 
 export const metadata: Metadata = {
   title: "UltimatePlanner",
-  description: "Finanças pessoais com backend Supabase e visual preservado."
+  description: "Finanças pessoais, metas, projetos, cartões e investimentos em um painel claro."
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

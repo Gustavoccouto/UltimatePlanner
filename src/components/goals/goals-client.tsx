@@ -1,6 +1,6 @@
 "use client";
 
-import { CSSProperties, FormEvent, useMemo, useState } from "react";
+import { CSSProperties, FormEvent, useEffect, useMemo, useState } from "react";
 import type { ActivityLog, Goal, GoalMovement, Profile, SharedItem } from "@/lib/domain/app-types";
 import { currencyBRL, datePt, percent } from "@/lib/domain/formatters";
 import { ColorPickerField } from "@/components/ui/color-picker-field";
@@ -109,6 +109,8 @@ export function GoalsClient(props: Bundle) {
   const [movementForm, setMovementForm] = useState<MovementForm>(emptyMovementForm);
   const [shareSearch, setShareSearch] = useState("");
   const [shareRole, setShareRole] = useState<"viewer" | "editor">("editor");
+  const [profileResults, setProfileResults] = useState<Profile[]>([]);
+  const [profileSearchLoading, setProfileSearchLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -120,6 +122,39 @@ export function GoalsClient(props: Bundle) {
   const selectedLogs = useMemo(() => selectedGoal ? bundle.activityLogs.filter((log) => log.entity_id === selectedGoal.id || log.metadata?.goal_id === selectedGoal.id) : [], [bundle.activityLogs, selectedGoal]);
   const canManageSharing = selectedGoal?.owner_id === bundle.currentUserId;
   const canEditSelected = canManageSharing || selectedShares.some((share) => share.user_id === bundle.currentUserId && share.role === "editor");
+
+  useEffect(() => {
+    const term = shareSearch.trim();
+    let cancelled = false;
+
+    if (modal !== "share" || term.length < 2) {
+      setProfileResults([]);
+      setProfileSearchLoading(false);
+      return;
+    }
+
+    setProfileSearchLoading(true);
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/profiles?q=${encodeURIComponent(term)}`);
+        const payload = await response.json().catch(() => ({ data: [] }));
+
+        if (!cancelled) {
+          setProfileResults(Array.isArray(payload.data) ? payload.data : []);
+        }
+      } catch {
+        if (!cancelled) setProfileResults([]);
+      } finally {
+        if (!cancelled) setProfileSearchLoading(false);
+      }
+    }, 220);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [modal, shareSearch]);
 
   const totals = useMemo(() => {
     const activeGoals = bundle.goals.filter((goal) => goal.status === "active" || goal.status === "completed");
@@ -263,14 +298,44 @@ export function GoalsClient(props: Bundle) {
       setLoading(false);
     }
   }
+  async function updateShareRole(profile: Profile, role: "viewer" | "editor") {
+    if (!selectedGoal) return;
+    setLoading(true);
+    setError("");
 
-  const filteredProfiles = bundle.profiles
-    .filter((profile) => profile.id !== bundle.currentUserId)
-    .filter((profile) => {
-      const term = shareSearch.trim().toLowerCase();
-      if (!term) return true;
-      return `${profile.display_name || ""} ${profile.email || ""}`.toLowerCase().includes(term);
-    });
+    try {
+      await requestJson("/api/goals/sharing", {
+        method: "POST",
+        body: JSON.stringify({ goal_id: selectedGoal.id, user_id: profile.id, role, action: "add" })
+      });
+
+      await reload();
+      setMessage("Permissão atualizada.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível atualizar a permissão.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const profilesForSharing = useMemo(() => {
+    const map = new Map<string, Profile>();
+
+    bundle.profiles.forEach((profile) => map.set(profile.id, profile));
+    profileResults.forEach((profile) => map.set(profile.id, profile));
+
+    return Array.from(map.values()).filter((profile) => profile.id !== bundle.currentUserId);
+  }, [bundle.currentUserId, bundle.profiles, profileResults]);
+
+  const filteredProfiles = profilesForSharing.filter((profile) => {
+    const term = shareSearch.trim().toLowerCase();
+    const alreadyShared = selectedShares.some((share) => share.user_id === profile.id);
+
+    if (alreadyShared) return true;
+    if (!term) return false;
+
+    return `${profile.display_name || ""} ${profile.email || ""}`.toLowerCase().includes(term);
+  });
 
   return (
     <div className="grid">
@@ -387,13 +452,14 @@ export function GoalsClient(props: Bundle) {
       ) : null}
 
       {modal === "share" && selectedGoal ? (
-        <Modal title="Compartilhar meta" subtitle="Somente o dono pode adicionar ou remover participantes." onClose={() => setModal(null)}>
+        <Modal title="Compartilhar meta" subtitle="Adicione por nome ou e-mail. Editores podem alterar o meta; leitores apenas visualizam." onClose={() => setModal(null)}>
           <div className="form-grid">
             <div className="filters-panel">
               <label className="field"><span>Buscar usuário</span><input value={shareSearch} onChange={(e) => setShareSearch(e.target.value)} placeholder="Nome ou e-mail" /></label>
               <label className="field"><span>Permissão</span><select value={shareRole} onChange={(e) => setShareRole(e.target.value as "viewer" | "editor")}><option value="editor">Editor</option><option value="viewer">Leitor</option></select></label>
             </div>
-            <div className="share-list">
+            <p className="share-section-title">Participantes atuais</p>
+      <div className="share-list">
               {filteredProfiles.map((profile) => {
                 const share = selectedShares.find((item) => item.user_id === profile.id);
                 return (
@@ -403,7 +469,9 @@ export function GoalsClient(props: Bundle) {
                   </div>
                 );
               })}
-              {!filteredProfiles.length ? <div className="empty-state">Nenhum usuário encontrado.</div> : null}
+              {profileSearchLoading ? <div className="empty-state">Buscando usuários...</div> : null}
+        {!profileSearchLoading && shareSearch.trim().length < 2 ? <div className="empty-state">Digite pelo menos 2 letras do nome ou e-mail para buscar.</div> : null}
+        {!profileSearchLoading && shareSearch.trim().length >= 2 && !filteredProfiles.length ? <div className="empty-state">Nenhum usuário encontrado.</div> : null}
             </div>
           </div>
         </Modal>

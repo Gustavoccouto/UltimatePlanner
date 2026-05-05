@@ -737,6 +737,14 @@ export function TransactionsClient({
                     <p>{categoryName(categories, plan.category_id)} • início {datePt(plan.first_date)}</p>
                   </div>
                   <button className="btn btn-muted" type="button" onClick={() => togglePlan(plan.id)}>{isExpanded ? "Recolher detalhes" : "Ver parcelas"}</button>
+
+<button
+  type="button"
+  className="btn btn-danger-soft"
+  onClick={() => handleDeleteInstallmentPlan?.(plan.id)}
+>
+  Excluir compra inteira
+</button>
                 </div>
                 <div className="installment-summary-grid">
                   <span><small>Total</small><strong>{currencyBRL(plan.total_amount)}</strong></span>

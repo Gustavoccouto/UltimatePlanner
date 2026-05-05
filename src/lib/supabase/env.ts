@@ -4,7 +4,7 @@ export function getSupabasePublicConfig() {
 
   if (!url || !key) {
     throw new Error(
-      "Supabase público não configurado. Configure NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY ou NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY."
+      "Supabase público não configurado. Configure NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY no .env.local e reinicie o servidor de desenvolvimento."
     );
   }
 

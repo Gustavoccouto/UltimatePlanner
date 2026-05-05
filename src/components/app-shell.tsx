@@ -4,19 +4,20 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { BootstrapIcon } from "@/components/ui/bootstrap-icon";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 const navItems = [
-  { label: "Dashboard", href: "/dashboard", icon: "⌂", caption: "Visão geral" },
-  { label: "Contas", href: "/accounts", icon: "◷", caption: "Saldos" },
-  { label: "Categorias", href: "/categories", icon: "◇", caption: "Organização" },
-  { label: "Transações", href: "/transactions", icon: "↕", caption: "Entradas e saídas" },
-  { label: "Cartões", href: "/cards", icon: "▣", caption: "Faturas" },
-  { label: "Projetos", href: "/projects", icon: "▤", caption: "Planejamento" },
-  { label: "Metas", href: "/goals", icon: "◎", caption: "Objetivos" },
-  { label: "Investimentos", href: "/investments", icon: "△", caption: "Carteira" },
-  { label: "Consultor IA", href: "/ai", icon: "✦", caption: "Análise" },
-  { label: "Conta", href: "/settings", icon: "◉", caption: "Usuário e segurança" }
+  { label: "Dashboard", href: "/dashboard", icon: "grid", caption: "Visão geral" },
+  { label: "Contas", href: "/accounts", icon: "wallet2", caption: "Saldos" },
+  { label: "Categorias", href: "/categories", icon: "tags", caption: "Organização" },
+  { label: "Transações", href: "/transactions", icon: "arrow-left-right", caption: "Entradas e saídas" },
+  { label: "Cartões", href: "/cards", icon: "credit-card", caption: "Faturas" },
+  { label: "Projetos", href: "/projects", icon: "kanban", caption: "Planejamento" },
+  { label: "Metas", href: "/goals", icon: "bullseye", caption: "Objetivos" },
+  { label: "Investimentos", href: "/investments", icon: "graph-up-arrow", caption: "Carteira" },
+  { label: "Consultor IA", href: "/ai", icon: "stars", caption: "Análise" },
+  { label: "Conta", href: "/settings", icon: "person-circle", caption: "Usuário e segurança" }
 ] as const;
 
 type CurrentUser = {
@@ -31,21 +32,21 @@ function useCurrentSection(pathname: string) {
   }, [pathname]);
 }
 
-function getInitials(nameOrEmail: string) {
-  const clean = nameOrEmail.trim();
+function getInitials(value: string) {
+  const clean = value.trim();
 
-  if (!clean) return "U";
+  if (!clean) return "UP";
 
-  const nameParts = clean
+  const parts = clean
     .replace(/@.*/, "")
     .split(/[.\s_-]+/)
     .filter(Boolean);
 
-  if (nameParts.length === 1) {
-    return nameParts[0].slice(0, 2).toUpperCase();
+  if (parts.length <= 1) {
+    return parts[0]?.slice(0, 2).toUpperCase() || "UP";
   }
 
-  return `${nameParts[0][0]}${nameParts[1][0]}`.toUpperCase();
+  return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
 }
 
 function getShortName(name: string, email: string) {
@@ -62,7 +63,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [signingOut, setSigningOut] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-
   const userMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -91,7 +91,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           ? data.user.user_metadata.name
           : typeof data.user.user_metadata?.full_name === "string"
             ? data.user.user_metadata.full_name
-            : "";
+            : typeof data.user.user_metadata?.display_name === "string"
+              ? data.user.user_metadata.display_name
+              : "";
 
       const displayName = metadataName || email || "Usuário";
 
@@ -112,15 +114,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (!userMenuRef.current) return;
-      if (!userMenuRef.current.contains(event.target as Node)) {
-        setUserMenuOpen(false);
-      }
+      if (!userMenuRef.current.contains(event.target as Node)) setUserMenuOpen(false);
     }
 
     function handleEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setUserMenuOpen(false);
-      }
+      if (event.key === "Escape") setUserMenuOpen(false);
     }
 
     document.addEventListener("mousedown", handleClickOutside);
@@ -142,6 +140,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     router.refresh();
   }
 
+  const displayName = currentUser ? getShortName(currentUser.name, currentUser.email) : "Usuário";
+
   const nav = (
     <nav className="nav" aria-label="Navegação principal">
       {navItems.map((item) => {
@@ -150,7 +150,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         return (
           <Link key={item.href} href={item.href} className={active ? "nav-link nav-link-active" : "nav-link"}>
             <span className="nav-icon" aria-hidden="true">
-              {item.icon}
+              <BootstrapIcon name={item.icon} size={16} />
             </span>
 
             <span className="nav-text">
@@ -163,14 +163,13 @@ export function AppShell({ children }: { children: ReactNode }) {
     </nav>
   );
 
-  const displayName = currentUser ? getShortName(currentUser.name, currentUser.email) : "Usuário";
-
   return (
     <div className="app-shell" id="app-shell">
       <aside className="sidebar" aria-label="Menu lateral">
         <div className="sidebar-inner">
           <div className="brand">
             <div className="brand-mark" aria-hidden="true" />
+
             <div>
               <p className="brand-title">UltimatePlanner</p>
               <p className="brand-caption">Finanças & Planejamento</p>
@@ -197,12 +196,12 @@ export function AppShell({ children }: { children: ReactNode }) {
               aria-expanded={drawerOpen}
               onClick={() => setDrawerOpen(true)}
             >
-              ☰
+              <BootstrapIcon name="list" size={22} />
             </button>
 
             <div className="search-shell" aria-label="Seção atual">
               <span className="search-icon" aria-hidden="true">
-                {currentSection.icon}
+                <BootstrapIcon name={currentSection.icon} size={16} />
               </span>
 
               <div>
@@ -211,7 +210,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </div>
             </div>
 
-            <div className="topbar-sync-pill" title="Migração incremental em Supabase">
+            <div className="topbar-sync-pill" title="Base online em Supabase">
               <span className="sync-dot" />
               Online
             </div>
@@ -220,17 +219,13 @@ export function AppShell({ children }: { children: ReactNode }) {
               <button
                 type="button"
                 className="user-chip"
-                onClick={() => setUserMenuOpen((prev) => !prev)}
+                onClick={() => setUserMenuOpen((open) => !open)}
                 aria-haspopup="menu"
                 aria-expanded={userMenuOpen}
-                aria-label={
-                  currentUser
-                    ? `Abrir menu do usuário ${displayName}`
-                    : "Abrir menu do usuário"
-                }
+                aria-label={currentUser ? `Abrir menu do usuário ${displayName}` : "Abrir menu do usuário"}
               >
                 <span className="user-chip-avatar" aria-hidden="true">
-                  {currentUser?.initials || "U"}
+                  {currentUser?.initials || "UP"}
                 </span>
 
                 <span className="user-chip-copy">
@@ -238,7 +233,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </span>
 
                 <span className={userMenuOpen ? "user-chip-chevron open" : "user-chip-chevron"} aria-hidden="true">
-                  ▾
+                  <BootstrapIcon name="chevron-down" size={12} />
                 </span>
               </button>
 
@@ -246,7 +241,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <div className="user-dropdown" role="menu" aria-label="Menu do usuário">
                   <div className="user-dropdown-header">
                     <span className="user-dropdown-avatar" aria-hidden="true">
-                      {currentUser?.initials || "U"}
+                      {currentUser?.initials || "UP"}
                     </span>
 
                     <div className="user-dropdown-info">
@@ -256,22 +251,13 @@ export function AppShell({ children }: { children: ReactNode }) {
                   </div>
 
                   <div className="user-dropdown-actions">
-                    <Link
-                      href="/settings"
-                      className="user-dropdown-link"
-                      role="menuitem"
-                      onClick={() => setUserMenuOpen(false)}
-                    >
+                    <Link href="/settings" className="user-dropdown-link" role="menuitem" onClick={() => setUserMenuOpen(false)}>
+                      <BootstrapIcon name="gear" size={15} />
                       Minha conta
                     </Link>
 
-                    <button
-                      type="button"
-                      className="user-dropdown-danger"
-                      role="menuitem"
-                      onClick={handleSignOut}
-                      disabled={signingOut}
-                    >
+                    <button type="button" className="user-dropdown-danger" role="menuitem" onClick={handleSignOut} disabled={signingOut}>
+                      <BootstrapIcon name="box-arrow-right" size={15} />
                       {signingOut ? "Saindo..." : "Sair"}
                     </button>
                   </div>
@@ -299,7 +285,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
 
             <button className="icon-button" type="button" onClick={() => setDrawerOpen(false)} aria-label="Fechar menu">
-              ×
+              <BootstrapIcon name="x-lg" size={16} />
             </button>
           </div>
 
@@ -319,271 +305,11 @@ export function AppShell({ children }: { children: ReactNode }) {
           {nav}
 
           <button className="btn btn-muted mobile-signout" type="button" disabled={signingOut} onClick={handleSignOut}>
+            <BootstrapIcon name="box-arrow-right" size={16} />
             {signingOut ? "Saindo..." : "Sair da conta"}
           </button>
         </aside>
       </div>
-
-      <style jsx>{`
-        .topbar-main {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-        }
-
-        .user-menu {
-          position: relative;
-          margin-left: auto;
-          flex-shrink: 0;
-        }
-
-        .user-chip {
-          display: inline-flex;
-          align-items: center;
-          gap: 10px;
-          height: 44px;
-          padding: 0 12px 0 8px;
-          border: 1px solid rgba(15, 23, 42, 0.08);
-          border-radius: 999px;
-          background: rgba(255, 255, 255, 0.88);
-          color: #0f172a;
-          cursor: pointer;
-          transition:
-            transform 160ms ease,
-            box-shadow 160ms ease,
-            border-color 160ms ease,
-            background 160ms ease;
-          box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
-        }
-
-        .user-chip:hover {
-          transform: translateY(-1px);
-          box-shadow: 0 10px 24px rgba(15, 23, 42, 0.09);
-          border-color: rgba(15, 23, 42, 0.14);
-          background: rgba(255, 255, 255, 0.96);
-        }
-
-        .user-chip:focus-visible {
-          outline: 3px solid rgba(16, 185, 129, 0.22);
-          outline-offset: 3px;
-        }
-
-        .user-chip-avatar,
-        .user-dropdown-avatar,
-        .mobile-user-avatar {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          border-radius: 999px;
-          font-weight: 800;
-          color: white;
-          background: linear-gradient(135deg, #10b981, #34d399);
-          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
-        }
-
-        .user-chip-avatar {
-          width: 30px;
-          height: 30px;
-          font-size: 12px;
-        }
-
-        .user-chip-copy {
-          display: inline-flex;
-          align-items: center;
-          min-width: 0;
-        }
-
-        .user-chip-copy strong {
-          max-width: 140px;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          font-size: 14px;
-          line-height: 1;
-        }
-
-        .user-chip-chevron {
-          font-size: 12px;
-          color: #64748b;
-          transition: transform 160ms ease;
-        }
-
-        .user-chip-chevron.open {
-          transform: rotate(180deg);
-        }
-
-        .user-dropdown {
-          position: absolute;
-          top: calc(100% + 10px);
-          right: 0;
-          width: 260px;
-          border-radius: 18px;
-          border: 1px solid rgba(15, 23, 42, 0.08);
-          background: rgba(255, 255, 255, 0.98);
-          box-shadow: 0 20px 40px rgba(15, 23, 42, 0.14);
-          padding: 10px;
-          z-index: 30;
-          backdrop-filter: blur(14px);
-        }
-
-        .user-dropdown-header {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding: 10px;
-          border-radius: 14px;
-          background: rgba(15, 23, 42, 0.03);
-        }
-
-        .user-dropdown-avatar {
-          width: 40px;
-          height: 40px;
-          font-size: 14px;
-          flex-shrink: 0;
-        }
-
-        .user-dropdown-info {
-          min-width: 0;
-          display: flex;
-          flex-direction: column;
-        }
-
-        .user-dropdown-info strong,
-        .user-dropdown-info small {
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .user-dropdown-info strong {
-          font-size: 14px;
-          color: #0f172a;
-        }
-
-        .user-dropdown-info small {
-          font-size: 12px;
-          color: #64748b;
-        }
-
-        .user-dropdown-actions {
-          display: grid;
-          gap: 8px;
-          padding-top: 10px;
-        }
-
-        .user-dropdown-link,
-        .user-dropdown-danger {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 100%;
-          min-height: 40px;
-          border-radius: 12px;
-          font-size: 14px;
-          font-weight: 700;
-          text-decoration: none;
-          transition:
-            background 160ms ease,
-            border-color 160ms ease,
-            transform 160ms ease,
-            filter 160ms ease;
-        }
-
-        .user-dropdown-link {
-          border: 1px solid rgba(15, 23, 42, 0.08);
-          background: rgba(15, 23, 42, 0.04);
-          color: #0f172a;
-        }
-
-        .user-dropdown-link:hover {
-          background: rgba(15, 23, 42, 0.07);
-          transform: translateY(-1px);
-        }
-
-        .user-dropdown-danger {
-          border: 1px solid rgba(220, 38, 38, 0.18);
-          background: rgba(220, 38, 38, 0.08);
-          color: #b91c1c;
-          cursor: pointer;
-        }
-
-        .user-dropdown-danger:hover:not(:disabled) {
-          background: rgba(220, 38, 38, 0.12);
-          transform: translateY(-1px);
-        }
-
-        .user-dropdown-danger:disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-        }
-
-        .mobile-user-card {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          text-decoration: none;
-          margin-bottom: 14px;
-          padding: 12px 14px;
-          border-radius: 16px;
-          background: rgba(15, 23, 42, 0.04);
-          border: 1px solid rgba(15, 23, 42, 0.06);
-        }
-
-        .mobile-user-avatar {
-          width: 38px;
-          height: 38px;
-          font-size: 14px;
-          flex-shrink: 0;
-        }
-
-        .mobile-user-text {
-          min-width: 0;
-          display: flex;
-          flex-direction: column;
-        }
-
-        .mobile-user-text strong,
-        .mobile-user-text small {
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .mobile-user-text strong {
-          color: #0f172a;
-          font-size: 14px;
-        }
-
-        .mobile-user-text small {
-          color: #64748b;
-          font-size: 12px;
-        }
-
-        @media (max-width: 840px) {
-          .user-chip-copy {
-            display: none;
-          }
-
-          .user-chip {
-            padding-right: 10px;
-          }
-
-          .user-dropdown {
-            right: 0;
-            width: min(260px, calc(100vw - 24px));
-          }
-        }
-
-        @media (max-width: 640px) {
-          .user-menu {
-            margin-left: 0;
-          }
-
-          .topbar-sync-pill {
-            display: none;
-          }
-        }
-      `}</style>
     </div>
   );
 }

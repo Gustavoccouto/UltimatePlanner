@@ -13,7 +13,6 @@ const bodySchema = z.discriminatedUnion("action", [
     target_billing_month: z.string().regex(/^\d{4}-\d{2}(-\d{2})?$/, "Competência inválida."),
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Data inválida.")
   }),
-
   z.object({
     action: z.literal("pay"),
     id: z.string().uuid("Parcela inválida."),
@@ -21,7 +20,6 @@ const bodySchema = z.discriminatedUnion("action", [
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Data inválida."),
     notes: z.string().trim().optional().nullable()
   }),
-
   z.object({
     action: z.literal("edit"),
     id: z.string().uuid("Parcela inválida."),
@@ -33,12 +31,10 @@ const bodySchema = z.discriminatedUnion("action", [
     category_name: z.string().trim().optional().nullable(),
     notes: z.string().trim().optional().nullable()
   }),
-
   z.object({
     action: z.literal("delete"),
     id: z.string().uuid("Parcela inválida.")
   }),
-
   z.object({
     action: z.literal("delete_plan"),
     id: z.string().uuid("Parcela inválida.")
@@ -54,14 +50,11 @@ type DeletePlanResult = {
 
 function money(value: number | string | null | undefined) {
   const parsed = Number(value || 0);
-
   return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : 0;
 }
 
 async function readTransaction(context: ApiContext, id: string) {
-  if ("error" in context) {
-    throw new Error("Não autenticado.");
-  }
+  if ("error" in context) throw new Error("Não autenticado.");
 
   const { data, error } = await context.supabase
     .from("transactions")
@@ -70,9 +63,7 @@ async function readTransaction(context: ApiContext, id: string) {
     .eq("id", id)
     .single();
 
-  if (error || !data) {
-    throw new Error("Parcela não encontrada.");
-  }
+  if (error || !data) throw new Error("Parcela não encontrada.");
 
   if (data.type !== "card_expense" || !data.installment_id || !data.installment_plan_id || !data.credit_card_id) {
     throw new Error("O lançamento selecionado não é uma parcela de cartão válida.");
@@ -102,10 +93,7 @@ export async function PATCH(request: Request) {
         await recalculateInvoicesForCardMonths(context.supabase, context.user.id, result.card_id, result.billing_months);
       }
 
-      return NextResponse.json({
-        ok: true,
-        behavior: "entire_credit_installment_plan_deleted"
-      });
+      return NextResponse.json({ ok: true, behavior: "entire_credit_installment_plan_deleted" });
     }
 
     const transaction = await readTransaction(context, payload.id);
@@ -113,7 +101,6 @@ export async function PATCH(request: Request) {
 
     if (payload.action === "anticipate") {
       const targetBillingMonth = normalizeBillingMonth(payload.target_billing_month);
-
       const metadata = mergeMetadata(transaction.metadata, {
         installment_status: "pending",
         anticipated_at: new Date().toISOString(),
@@ -122,12 +109,7 @@ export async function PATCH(request: Request) {
 
       const { data, error } = await context.supabase
         .from("transactions")
-        .update({
-          billing_month: targetBillingMonth,
-          date: payload.date,
-          is_paid: false,
-          metadata
-        })
+        .update({ billing_month: targetBillingMonth, date: payload.date, is_paid: false, metadata })
         .eq("owner_id", context.user.id)
         .eq("id", transaction.id)
         .select("*")
@@ -137,12 +119,7 @@ export async function PATCH(request: Request) {
 
       const { error: installmentError } = await context.supabase
         .from("installments")
-        .update({
-          billing_month: targetBillingMonth,
-          due_date: payload.date,
-          status: "pending",
-          anticipated_at: new Date().toISOString()
-        })
+        .update({ billing_month: targetBillingMonth, due_date: payload.date, status: "pending", anticipated_at: new Date().toISOString() })
         .eq("owner_id", context.user.id)
         .eq("id", transaction.installment_id);
 
@@ -183,9 +160,7 @@ export async function PATCH(request: Request) {
         .select("*")
         .single();
 
-      if (paymentError || !payment) {
-        return jsonError(paymentError?.message || "Não foi possível registrar o pagamento.", 500);
-      }
+      if (paymentError || !payment) return jsonError(paymentError?.message || "Não foi possível registrar o pagamento.", 500);
 
       const { data, error } = await context.supabase
         .from("transactions")
@@ -206,29 +181,20 @@ export async function PATCH(request: Request) {
 
       const { error: installmentError } = await context.supabase
         .from("installments")
-        .update({
-          status: "paid",
-          metadata: {
-            payment_transaction_id: payment.id,
-            paid_at: new Date().toISOString()
-          }
-        })
+        .update({ status: "paid", metadata: { payment_transaction_id: payment.id, paid_at: new Date().toISOString() } })
         .eq("owner_id", context.user.id)
         .eq("id", transaction.installment_id);
 
       if (installmentError) return jsonError(installmentError.message, 500);
 
       await reconcileInstallmentPlan(context.supabase, context.user.id, transaction.installment_plan_id);
-      await recalculateInvoicesForCardMonths(context.supabase, context.user.id, transaction.credit_card_id, [
-        transaction.billing_month
-      ]);
+      await recalculateInvoicesForCardMonths(context.supabase, context.user.id, transaction.credit_card_id, [transaction.billing_month]);
 
       return NextResponse.json({ data, payment });
     }
 
     if (payload.action === "edit") {
       const billingMonth = normalizeBillingMonth(payload.billing_month);
-
       const categoryId =
         normalizeOptionalUuid(payload.category_id) ||
         (await ensureCategoryByName(
@@ -272,10 +238,7 @@ export async function PATCH(request: Request) {
       if (installmentError) return jsonError(installmentError.message, 500);
 
       await reconcileInstallmentPlan(context.supabase, context.user.id, transaction.installment_plan_id);
-      await recalculateInvoicesForCardMonths(context.supabase, context.user.id, transaction.credit_card_id, [
-        previousBillingMonth,
-        billingMonth
-      ]);
+      await recalculateInvoicesForCardMonths(context.supabase, context.user.id, transaction.credit_card_id, [previousBillingMonth, billingMonth]);
 
       return NextResponse.json({ data });
     }
@@ -313,23 +276,20 @@ export async function PATCH(request: Request) {
       if (installmentError) return jsonError(installmentError.message, 500);
 
       const paymentTransactionId =
-        typeof transaction.metadata?.payment_transaction_id === "string" ? transaction.metadata.payment_transaction_id : null;
+        transaction.metadata && typeof transaction.metadata === "object" && !Array.isArray(transaction.metadata)
+          ? (transaction.metadata as Record<string, unknown>).payment_transaction_id
+          : null;
 
-      if (paymentTransactionId) {
+      if (typeof paymentTransactionId === "string") {
         await context.supabase
           .from("transactions")
-          .update({
-            is_deleted: true,
-            status: "canceled"
-          })
+          .update({ is_deleted: true, status: "canceled" })
           .eq("owner_id", context.user.id)
           .eq("id", paymentTransactionId);
       }
 
       await reconcileInstallmentPlan(context.supabase, context.user.id, transaction.installment_plan_id);
-      await recalculateInvoicesForCardMonths(context.supabase, context.user.id, transaction.credit_card_id, [
-        previousBillingMonth
-      ]);
+      await recalculateInvoicesForCardMonths(context.supabase, context.user.id, transaction.credit_card_id, [previousBillingMonth]);
 
       return NextResponse.json({ data });
     }

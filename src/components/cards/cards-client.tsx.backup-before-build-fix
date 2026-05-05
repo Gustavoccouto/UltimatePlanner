@@ -521,7 +521,7 @@ export function CardsClient({
             <div className="finance-card-actions">
               <button className="btn btn-muted" onClick={() => openInvoiceModal(card.id)}>Pagar fatura</button>
               <button className="link-button" onClick={() => openCardModal(card)}>Editar</button>
-              <button className="btn btn-danger-soft" onClick={() => deleteCard(card)}>Excluir</button>
+              <button className="link-button danger-text" onClick={() => deleteCard(card)}>Excluir</button>
             </div>
           </article>
         )) : <div className="empty-state wide">Nenhum cartão cadastrado. Cadastre um cartão para controlar faturas e parcelamentos.</div>}
@@ -572,6 +572,14 @@ export function CardsClient({
                   <span><strong>{currencyBRL(plan.total_amount)}</strong><small>{plan.remaining_count} pendente(s) • {plan.paid_count} paga(s)</small></span>
                   <span className="badge">{isOpen ? "Recolher detalhes" : "Ver parcelas"}</span>
                 </button>
+
+<button
+  type="button"
+  className="btn btn-danger-soft"
+  onClick={() => handleDeleteInstallmentPlan?.(plan.id)}
+>
+  Excluir compra inteira
+</button>
                 {isOpen ? (
                   <div className="table-scroll installment-table-wrap">
                     <table className="table compact-table">
@@ -591,20 +599,15 @@ export function CardsClient({
                                 {transaction && installment.status !== "paid" ? <button className="link-button" onClick={() => openInstallmentPayment(transaction)}>Pagar</button> : null}
                                 {transaction && installment.status !== "paid" ? <button className="link-button" onClick={() => anticipateInstallment(transaction)}>Adiantar</button> : null}
                                 {transaction ? <button className="link-button" onClick={() => openInstallmentEdit(transaction)}>Editar</button> : null}
-                                {transaction ? <button className="btn btn-danger-soft" onClick={() => deleteInstallment(transaction)}>Excluir</button> : null}
+                                {transaction ? <button className="link-button danger-text" onClick={() => deleteInstallment(transaction)}>Excluir</button> : null}
+                                  {transaction && transaction.installment_plan_id ? (
+) : null}
                               </td>
                             </tr>
                           );
                         })}
                       </tbody>
                     </table>
-                                        <button
-  type="button"
-  className="btn btn-danger-soft installment-plan-summary btn-danger-summary"
-  onClick={() => handleDeleteInstallmentPlan?.(plan.id)}
->
-  Excluir compra inteira
-</button>
                   </div>
                 ) : null}
               </article>

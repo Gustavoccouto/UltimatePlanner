@@ -6,12 +6,12 @@ import { recalculateInvoicesForCardMonths } from "@/lib/server/card-ledger";
 
 const cardSchema = z.object({
   id: z.string().uuid().optional(),
-  name: z.string().trim().min(1, "Nome do cartão é obrigatório."),
+  name: z.string().trim().min(1, "Informe o nome do cartão."),
   brand: z.string().trim().optional().nullable(),
-  limit_amount: z.coerce.number().min(0, "Limite não pode ser negativo."),
-  closing_day: z.coerce.number().int().min(1, "Fechamento inválido.").max(31, "Fechamento inválido."),
-  due_day: z.coerce.number().int().min(1, "Vencimento inválido.").max(31, "Vencimento inválido."),
-  account_id: z.string().uuid().optional().nullable(),
+  limit_amount: z.coerce.number().min(0, "O limite não pode ser negativo."),
+  closing_day: z.coerce.number().int().min(1, "O dia de fechamento deve estar entre 1 e 31.").max(31, "O dia de fechamento deve estar entre 1 e 31."),
+  due_day: z.coerce.number().int().min(1, "O dia de vencimento deve estar entre 1 e 31.").max(31, "O dia de vencimento deve estar entre 1 e 31."),
+  account_id: z.string().optional().nullable(),
   color: z.string().trim().optional().nullable(),
   notes: z.string().trim().optional().nullable()
 });
@@ -25,6 +25,20 @@ type SafeDeleteCardResult = {
   billing_months: string[] | null;
 };
 
+function friendlyDatabaseError(message: string) {
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes("invalid input syntax for type uuid") || normalized.includes("invalid uuid")) {
+    return "Selecione uma conta válida ou deixe o campo Conta vinculada como 'Nenhuma'.";
+  }
+
+  if (normalized.includes("violates foreign key")) {
+    return "Algum vínculo selecionado não existe mais. Atualize a página e tente novamente.";
+  }
+
+  return message;
+}
+
 export async function GET() {
   const context = await getApiContext();
 
@@ -37,7 +51,7 @@ export async function GET() {
     .eq("is_deleted", false)
     .order("created_at", { ascending: true });
 
-  if (error) return jsonError(error.message, 500);
+  if (error) return jsonError(friendlyDatabaseError(error.message), 500);
 
   return NextResponse.json({ data: data || [] });
 }
@@ -66,11 +80,11 @@ export async function POST(request: Request) {
 
     const { data, error } = await context.supabase.from("credit_cards").insert(record).select("*").single();
 
-    if (error) return jsonError(error.message, 500);
+    if (error) return jsonError(friendlyDatabaseError(error.message), 500);
 
     return NextResponse.json({ data }, { status: 201 });
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : "Não foi possível salvar o cartão.");
+    return jsonError(error instanceof Error ? friendlyDatabaseError(error.message) : "Não foi possível salvar o cartão.");
   }
 }
 
@@ -110,11 +124,11 @@ export async function PATCH(request: Request) {
       .select("*")
       .single();
 
-    if (error) return jsonError(error.message, 500);
+    if (error) return jsonError(friendlyDatabaseError(error.message), 500);
 
     return NextResponse.json({ data });
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : "Não foi possível atualizar o cartão.");
+    return jsonError(error instanceof Error ? friendlyDatabaseError(error.message) : "Não foi possível atualizar o cartão.");
   }
 }
 
@@ -130,7 +144,7 @@ export async function DELETE(request: Request) {
       target_card_id: payload.id
     });
 
-    if (error) return jsonError(error.message, 500);
+    if (error) return jsonError(friendlyDatabaseError(error.message), 500);
 
     const result = Array.isArray(data) ? (data[0] as SafeDeleteCardResult | undefined) : undefined;
 
@@ -138,11 +152,8 @@ export async function DELETE(request: Request) {
       await recalculateInvoicesForCardMonths(context.supabase, context.user.id, result.card_id, result.billing_months);
     }
 
-    return NextResponse.json({
-      ok: true,
-      behavior: "card_archived_installments_preserved_as_debt"
-    });
+    return NextResponse.json({ ok: true, behavior: "card_archived_installments_preserved_as_debt" });
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : "Não foi possível excluir o cartão.");
+    return jsonError(error instanceof Error ? friendlyDatabaseError(error.message) : "Não foi possível excluir o cartão.");
   }
 }

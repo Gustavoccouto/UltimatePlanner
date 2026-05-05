@@ -17,3 +17,7 @@ export function createSupabaseAdminClient() {
     }
   });
 }
+
+export function hasSupabaseAdminKey() {
+  return Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
+}
