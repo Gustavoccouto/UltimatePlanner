@@ -1,67 +1,69 @@
 import { NextResponse } from "next/server";
 
 import { getApiContext, jsonError } from "@/lib/http/api";
-import { createSupabaseAdminClient, hasSupabaseAdminKey } from "@/lib/supabase/admin";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
-type ProfileLike = {
-  id?: unknown;
-  email?: unknown;
-  display_name?: unknown;
-  avatar_url?: unknown;
-  created_at?: unknown;
-  updated_at?: unknown;
+type RawProfile = {
+  id?: string | null;
+  email?: string | null;
+  display_name?: string | null;
+  full_name?: string | null;
+  name?: string | null;
+  avatar_url?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+type ProfileSearchResult = {
+  id: string;
+  email: string;
+  display_name: string;
+  avatar_url: string | null;
+  created_at: string | null;
+  updated_at: string | null;
 };
 
 function normalizeSearch(value: string | null) {
   return (value || "").trim().toLowerCase();
 }
 
-function normalizeProfile(profile: ProfileLike) {
+function normalizeProfile(profile: RawProfile): ProfileSearchResult | null {
+  const id = profile.id?.trim();
+
+  if (!id) {
+    return null;
+  }
+
+  const email = profile.email?.trim() || "";
+  const displayName =
+    profile.display_name?.trim() ||
+    profile.full_name?.trim() ||
+    profile.name?.trim() ||
+    email.split("@")[0] ||
+    "Usuário";
+
   return {
-    id: String(profile.id || ""),
-    email: typeof profile.email === "string" ? profile.email : null,
-    display_name: typeof profile.display_name === "string" ? profile.display_name : null,
-    avatar_url: typeof profile.avatar_url === "string" ? profile.avatar_url : null,
-    created_at: typeof profile.created_at === "string" ? profile.created_at : null,
-    updated_at: typeof profile.updated_at === "string" ? profile.updated_at : null
+    id,
+    email,
+    display_name: displayName,
+    avatar_url: profile.avatar_url || null,
+    created_at: profile.created_at || null,
+    updated_at: profile.updated_at || null
   };
 }
 
-async function searchFromAuthUsers(query: string, requesterId: string) {
-  if (!hasSupabaseAdminKey()) return [];
-
-  const admin = createSupabaseAdminClient();
-  const { data, error } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
-
-  if (error) throw error;
-
-  return (data.users || [])
-    .filter((user) => user.id !== requesterId)
-    .filter((user) => {
-      const email = user.email || "";
-      const meta = user.user_metadata || {};
-      const name = String(meta.display_name || meta.full_name || meta.name || email.split("@")[0] || "");
-      return `${email} ${name}`.toLowerCase().includes(query);
-    })
-    .slice(0, 20)
-    .map((user) => {
-      const meta = user.user_metadata || {};
-      const email = user.email || "";
-      return normalizeProfile({
-        id: user.id,
-        email,
-        display_name: String(meta.display_name || meta.full_name || meta.name || email.split("@")[0] || "Usuário"),
-        avatar_url: typeof meta.avatar_url === "string" ? meta.avatar_url : null,
-        created_at: user.created_at,
-        updated_at: user.updated_at
-      });
-    });
+function filterProfiles(rawProfiles: RawProfile[]) {
+  return rawProfiles
+    .map(normalizeProfile)
+    .filter((profile): profile is ProfileSearchResult => Boolean(profile?.id));
 }
 
 export async function GET(request: Request) {
   const context = await getApiContext();
 
-  if ("error" in context) return context.error;
+  if ("error" in context) {
+    return context.error;
+  }
 
   const { searchParams } = new URL(request.url);
   const query = normalizeSearch(searchParams.get("q"));
@@ -71,55 +73,39 @@ export async function GET(request: Request) {
   }
 
   try {
-    await context.supabase.rpc("ensure_current_user_profile");
-  } catch {
-    // A migration 0014 cria essa RPC. Se ainda não existir, seguimos para os fallbacks.
-  }
+    const admin = createSupabaseAdminClient();
 
-  const rpcPayload = {
-    search_text: query,
-    requester_id: context.user.id
-  };
+    const { data: rpcProfiles, error: rpcError } = await admin.rpc("search_profiles_for_sharing", {
+      search_text: query,
+      requester_id: context.user.id
+    });
 
-  const search = await context.supabase.rpc("search_profiles_for_sharing", rpcPayload);
-
-  if (!search.error) {
-    const rpcProfiles = (search.data || []).map(normalizeProfile).filter((profile) => profile.id);
-
-    if (rpcProfiles.length) {
-      return NextResponse.json({ data: rpcProfiles });
+    if (!rpcError) {
+      const profiles = filterProfiles((rpcProfiles || []) as RawProfile[]);
+      return NextResponse.json({ data: profiles });
     }
-  }
 
-  if (hasSupabaseAdminKey()) {
-    try {
-      const admin = createSupabaseAdminClient();
+    const { data: tableProfiles, error: tableError } = await admin
+      .from("profiles")
+      .select("id,email,display_name,avatar_url,created_at,updated_at")
+      .neq("id", context.user.id)
+      .or(`email.ilike.%${query}%,display_name.ilike.%${query}%`)
+      .limit(20);
 
-      await admin.rpc("sync_profiles_from_auth_users");
-
-      const adminSearch = await admin.rpc("search_profiles_for_sharing", rpcPayload);
-
-      if (!adminSearch.error) {
-        const profiles = (adminSearch.data || []).map(normalizeProfile).filter((profile) => profile.id);
-
-        if (profiles.length) {
-          return NextResponse.json({ data: profiles });
-        }
-      }
-
-      const authProfiles = await searchFromAuthUsers(query, context.user.id);
-      return NextResponse.json({ data: authProfiles });
-    } catch (error) {
-      return jsonError(error instanceof Error ? error.message : "Não foi possível buscar usuários.", 500);
+    if (tableError) {
+      return jsonError(
+        "Não foi possível buscar usuários para compartilhar. Verifique se a migration de perfis foi aplicada no Supabase.",
+        500
+      );
     }
-  }
 
-  if (search.error) {
+    const profiles = filterProfiles((tableProfiles || []) as RawProfile[]);
+
+    return NextResponse.json({ data: profiles });
+  } catch (error) {
     return jsonError(
-      `${search.error.message}. Rode a migration 0014_final_polish_sharing_reset_cards.sql no Supabase para liberar a busca segura de usuários.`,
+      error instanceof Error ? error.message : "Não foi possível buscar usuários para compartilhar.",
       500
     );
   }
-
-  return NextResponse.json({ data: [] });
 }
