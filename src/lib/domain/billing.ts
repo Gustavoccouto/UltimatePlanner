@@ -1,6 +1,16 @@
+function normalizeDateInput(dateInput: string): string {
+  const text = String(dateInput || "");
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  if (/^\d{4}-\d{2}$/.test(text)) return `${text}-01`;
+
+  return normalizeBillingMonth(text);
+}
+
 function asDate(dateInput: string): Date {
-  const normalized = normalizeBillingMonth(dateInput).length === 10 ? normalizeBillingMonth(dateInput) : dateInput;
+  const normalized = normalizeDateInput(dateInput);
   const [year, month, day] = normalized.split("-").map(Number);
+
   return new Date(Date.UTC(year, month - 1, day || 1));
 }
 
@@ -9,18 +19,21 @@ function formatDate(date: Date): string {
 }
 
 function clampDay(year: number, monthIndex: number, day: number): number {
-  return Math.min(day, new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate());
+  return Math.min(Math.max(Number(day || 1), 1), new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate());
 }
 
 export function normalizeBillingMonth(month: string | null | undefined): string {
   if (!month) return "";
+
   if (/^\d{4}-\d{2}$/.test(month)) return `${month}-01`;
   if (/^\d{4}-\d{2}-\d{2}$/.test(month)) return `${month.slice(0, 7)}-01`;
+
   return month;
 }
 
 export function monthKey(month: string | null | undefined): string {
   if (!month) return "";
+
   return month.slice(0, 7);
 }
 
@@ -30,7 +43,9 @@ export function addMonths(dateInput: string, months: number): string {
   const year = date.getUTCFullYear();
   const day = date.getUTCDate();
   const target = new Date(Date.UTC(year, targetMonth, 1));
+
   target.setUTCDate(clampDay(target.getUTCFullYear(), target.getUTCMonth(), day));
+
   return formatDate(target);
 }
 
@@ -38,13 +53,23 @@ export function addMonthsToBillingMonth(monthInput: string, months: number): str
   return normalizeBillingMonth(addMonths(normalizeBillingMonth(monthInput), months));
 }
 
-export function getCardBillingMonth(purchaseDateInput: string, closingDay: number, dueDay: number): string {
+export function getCardBillingMonth(purchaseDateInput: string, closingDay: number, _dueDay: number): string {
   const purchaseDate = asDate(purchaseDateInput);
   const purchaseYear = purchaseDate.getUTCFullYear();
   const purchaseMonth = purchaseDate.getUTCMonth();
-  const closingDate = new Date(Date.UTC(purchaseYear, purchaseMonth, clampDay(purchaseYear, purchaseMonth, closingDay)));
+  const purchaseDay = purchaseDate.getUTCDate();
+  const safeClosingDay = clampDay(purchaseYear, purchaseMonth, closingDay);
 
-  const belongsToNextInvoice = purchaseDate.getTime() > closingDate.getTime();
+  /*
+   * Regra do app:
+   * - antes do fechamento: fatura do próprio mês;
+   * - no dia do fechamento ou depois: próxima fatura.
+   *
+   * Exemplo:
+   * compra 17/04, fechamento dia 09 => fatura 05;
+   * compra 09/04, fechamento dia 09 => fatura 05.
+   */
+  const belongsToNextInvoice = purchaseDay >= safeClosingDay;
   const invoiceMonthDate = new Date(Date.UTC(purchaseYear, purchaseMonth + (belongsToNextInvoice ? 1 : 0), 1));
 
   return `${invoiceMonthDate.getUTCFullYear()}-${String(invoiceMonthDate.getUTCMonth() + 1).padStart(2, "0")}-01`;
@@ -55,9 +80,16 @@ export function getInvoiceDates(billingMonthInput: string, closingDay: number, d
   const year = billingMonth.getUTCFullYear();
   const month = billingMonth.getUTCMonth();
   const closingDate = new Date(Date.UTC(year, month, clampDay(year, month, closingDay)));
+
   const dueMonthOffset = dueDay <= closingDay ? 1 : 0;
   const dueBase = new Date(Date.UTC(year, month + dueMonthOffset, 1));
-  const dueDate = new Date(Date.UTC(dueBase.getUTCFullYear(), dueBase.getUTCMonth(), clampDay(dueBase.getUTCFullYear(), dueBase.getUTCMonth(), dueDay)));
+  const dueDate = new Date(
+    Date.UTC(
+      dueBase.getUTCFullYear(),
+      dueBase.getUTCMonth(),
+      clampDay(dueBase.getUTCFullYear(), dueBase.getUTCMonth(), dueDay)
+    )
+  );
 
   return {
     billing_month: formatDate(new Date(Date.UTC(year, month, 1))),

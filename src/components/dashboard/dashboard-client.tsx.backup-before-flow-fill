@@ -324,30 +324,6 @@ export function DashboardClient({ snapshot }: DashboardClientProps) {
             <span style={{ width: `${clampPercent(expenseRatio)}%` }} />
           </div>
           <p className="muted-line">As saídas representam {percent(expenseRatio)} das receitas registradas até a referência.</p>
-
-          <div className="dashboard-flow-details-grid">
-            <article className="dashboard-flow-detail-card">
-              <span>Resultado do mês</span>
-              <strong className={summary.cashNet < 0 ? "danger-text" : "positive-text"}>
-                {currencyBRL(summary.cashNet)}
-              </strong>
-            </article>
-
-            <article className="dashboard-flow-detail-card">
-              <span>Entradas previstas</span>
-              <strong>{currencyBRL(summary.plannedIncoming)}</strong>
-            </article>
-
-            <article className="dashboard-flow-detail-card">
-              <span>Saídas previstas</span>
-              <strong>{currencyBRL(summary.plannedOutgoing)}</strong>
-            </article>
-
-            <article className="dashboard-flow-detail-card">
-              <span>Cartão no mês</span>
-              <strong>{currencyBRL(summary.cardExpenses)}</strong>
-            </article>
-          </div>
         </div>
 
         <MonthlyProjectionPanel
