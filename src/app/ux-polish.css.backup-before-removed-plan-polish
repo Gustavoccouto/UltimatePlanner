@@ -1,0 +1,57 @@
+/* Ajuste delicado do botão de excluir compra parcelada */
+.installment-plan-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.installment-plan-header .installment-plan-summary {
+  min-width: 0;
+}
+
+.installment-plan-delete-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 999px;
+  background: rgba(254, 242, 242, 0.92);
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.installment-plan-delete-chip:hover {
+  background: rgba(254, 226, 226, 0.96);
+  border-color: rgba(220, 38, 38, 0.34);
+  color: #991b1b;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(220, 38, 38, 0.1);
+}
+
+.installment-plan-delete-chip:focus-visible {
+  outline: 3px solid rgba(239, 68, 68, 0.18);
+  outline-offset: 2px;
+}
+
+@media (max-width: 720px) {
+  .installment-plan-header {
+    grid-template-columns: 1fr;
+  }
+
+  .installment-plan-delete-chip {
+    justify-self: flex-start;
+  }
+}

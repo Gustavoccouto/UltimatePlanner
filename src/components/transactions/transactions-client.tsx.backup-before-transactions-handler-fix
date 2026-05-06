@@ -741,9 +741,9 @@ export function TransactionsClient({
 <button
   type="button"
   className="btn btn-danger-soft"
-  onClick={() => handleDeleteDebitPlan(plan)}
+  onClick={() => handleDeleteInstallmentPlan?.(plan.id)}
 >
-  Excluir parcelamento
+  Excluir compra inteira
 </button>
                 </div>
                 <div className="installment-summary-grid">

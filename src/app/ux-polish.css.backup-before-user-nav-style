@@ -1,0 +1,159 @@
+/* Ajuste delicado do botão de excluir compra parcelada */
+.installment-plan-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.installment-plan-header .installment-plan-summary {
+  min-width: 0;
+}
+
+.installment-plan-delete-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 999px;
+  background: rgba(254, 242, 242, 0.92);
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.installment-plan-delete-chip:hover {
+  background: rgba(254, 226, 226, 0.96);
+  border-color: rgba(220, 38, 38, 0.34);
+  color: #991b1b;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(220, 38, 38, 0.1);
+}
+
+.installment-plan-delete-chip:focus-visible {
+  outline: 3px solid rgba(239, 68, 68, 0.18);
+  outline-offset: 2px;
+}
+
+@media (max-width: 720px) {
+  .installment-plan-header {
+    grid-template-columns: 1fr;
+  }
+
+  .installment-plan-delete-chip {
+    justify-self: flex-start;
+  }
+}
+
+
+/* removed-plan-user-spacing-patch */
+.installment-plan-card.is-removed {
+  opacity: 0.72;
+  background: rgba(148, 163, 184, 0.08) !important;
+  border-color: rgba(148, 163, 184, 0.20) !important;
+  box-shadow: none !important;
+}
+
+.installment-plan-card.is-removed .installment-plan-summary strong,
+.installment-plan-card.is-removed .installment-plan-summary small,
+.installment-plan-card.is-removed .muted-line,
+.installment-plan-card.is-removed td,
+.installment-plan-card.is-removed .table-actions {
+  color: #64748b !important;
+  text-decoration: line-through;
+}
+
+.installment-plan-card.is-removed .badge-muted {
+  background: rgba(148, 163, 184, 0.16) !important;
+  color: #64748b !important;
+}
+
+.installment-plan-delete-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  width: auto;
+  min-height: 34px;
+  margin: 10px 14px 14px 14px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(239, 68, 68, 0.18) !important;
+  background: rgba(254, 242, 242, 0.88) !important;
+  color: #b91c1c !important;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(220, 38, 38, 0.06);
+}
+
+.installment-plan-delete-chip:hover {
+  background: rgba(254, 226, 226, 0.96) !important;
+  border-color: rgba(220, 38, 38, 0.28) !important;
+  color: #991b1b !important;
+}
+
+.installment-plan-card.is-removed .installment-plan-delete-chip {
+  opacity: 0.55;
+}
+
+.topbar-main {
+  gap: 14px !important;
+}
+
+.user-menu {
+  margin-left: auto;
+  padding-left: 10px;
+  padding-bottom: 2px;
+}
+
+.user-chip {
+  gap: 12px !important;
+  padding: 8px 14px 8px 10px !important;
+  margin: 2px 0 !important;
+}
+
+.user-chip-avatar,
+.mobile-user-avatar {
+  flex-shrink: 0;
+}
+
+.user-chip-copy,
+.mobile-user-text {
+  min-width: 0;
+  padding-right: 4px;
+}
+
+.user-chip-copy strong,
+.mobile-user-text strong {
+  margin-bottom: 2px;
+}
+
+.mobile-user-card {
+  gap: 14px !important;
+  margin: 24px 8px 28px !important;
+  padding: 16px !important;
+}
+
+.mobile-user-card + .nav,
+.mobile-user-card ~ .nav {
+  margin-top: 16px !important;
+}
+
+@media (max-width: 720px) {
+  .installment-plan-delete-chip {
+    margin: 10px 12px 12px 12px;
+  }
+}

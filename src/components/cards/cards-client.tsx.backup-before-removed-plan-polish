@@ -579,8 +579,10 @@ export function CardsClient({
   <div className="installment-plan-list">
     {planViews.length ? (
       planViews.map((plan) => {
-        const isOpen = expandedPlans.has(plan.id); const isRemoved = plan.status === "canceled" || (plan.remaining_count === 0 && plan.paid_count === 0); return (
-          <article className={`installment-plan-card ${isOpen ? "is-open" : ""}${isRemoved ? " is-removed" : ""}`} key={plan.id}>
+        const isOpen = expandedPlans.has(plan.id);
+
+        return (
+          <article className={`installment-plan-card ${isOpen ? "is-open" : ""}`} key={plan.id}>
             <div className="installment-plan-header">
               <button
                 className="installment-plan-summary"
@@ -603,7 +605,7 @@ export function CardsClient({
                   </small>
                 </span>
 
-                <span className={`badge ${isRemoved ? "badge-muted" : ""}`}>{isRemoved ? "Removido" : isOpen ? "Recolher detalhes" : "Ver parcelas"}</span>
+                <span className="badge">{isOpen ? "Recolher detalhes" : "Ver parcelas"}</span>
               </button>
               <br />
               <button
