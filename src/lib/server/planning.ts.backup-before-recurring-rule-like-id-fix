@@ -13,7 +13,8 @@ type SupabaseLike = {
 
 type RecurringRuleLike = Pick<
   RecurringRule,
- "name"
+  | "id"
+  | "name"
   | "rule_type"
   | "target_type"
   | "account_id"
@@ -25,9 +26,7 @@ type RecurringRuleLike = Pick<
   | "end_date"
   | "notes"
   | "metadata"
-> & {
-  id?: string | null;
-};
+>;
 
 type BillingCard = Pick<CreditCard, "id" | "name" | "closing_day" | "due_day" | "limit_amount">;
 
