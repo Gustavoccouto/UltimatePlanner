@@ -37,7 +37,12 @@ type ItemForm = {
   notes: string;
 };
 
-type MovementForm = { project_id: string; account_id: string; type: "add" | "remove"; amount: string; description: string; };
+type MovementForm = {
+  project_id: string;
+  type: "add" | "remove";
+  amount: string;
+  description: string;
+};
 
 const projectThemes = {
   aurora: {
@@ -103,7 +108,12 @@ const emptyItemForm: ItemForm = {
   notes: ""
 };
 
-const emptyMovementForm: MovementForm = { project_id: "", account_id: "", type: "add", amount: "0", description: "" };
+const emptyMovementForm: MovementForm = {
+  project_id: "",
+  type: "add",
+  amount: "0",
+  description: ""
+};
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
