@@ -34,7 +34,7 @@ async function safeProfiles(context: any) {
 
 async function loadProjectsBundle(context: any) {
   const [projects, items, movements, shares, logs, profiles, accounts] = await Promise.all([
-    context.supabase.from("projects").select("*").eq("is_deleted", false).not("status", "in", "(archived,canceled,deleted)").order("created_at", { ascending: true }),
+    context.supabase.from("projects").select("*").eq("is_deleted", false).order("created_at", { ascending: true }),
     context.supabase.from("project_items").select("*").eq("is_deleted", false).order("created_at", { ascending: true }),
     context.supabase.from("project_movements").select("*").eq("is_deleted", false).order("created_at", { ascending: false }),
     context.supabase.from("shared_items").select("*").eq("item_type", "project").order("created_at", { ascending: true }),
@@ -195,7 +195,7 @@ export async function DELETE(request: Request) {
     const access = await assertCanManageSharing(context.supabase, "project", payload.id, context.user.id);
     const { error } = await context.supabase
       .from("projects")
-      .update({ is_deleted: true, status: "deleted", metadata: { deleted_at: new Date().toISOString(), delete_source: "projects" } })
+      .update({ is_deleted: true, status: "archived" })
       .eq("id", payload.id);
 
     if (error) return jsonError(error.message, 500);

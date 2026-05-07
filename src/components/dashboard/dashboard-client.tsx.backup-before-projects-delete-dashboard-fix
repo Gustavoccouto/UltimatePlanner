@@ -273,13 +273,7 @@ function projectItemCategory(item: ProjectDashboardItem) {
 
 function activeDashboardProjects(projects: ProjectDashboardProject[]) {
   return projects.filter((project) => {
-    const status = String(project.status || "active").toLowerCase();
-    const metadata = project && typeof (project as any).metadata === "object" && !Array.isArray((project as any).metadata)
-      ? ((project as any).metadata as Record<string, unknown>)
-      : {};
-    const deletedByMetadata = metadata.deleted === true || metadata.is_deleted === true || Boolean(metadata.deleted_at);
-
-    return !project.is_deleted && !deletedByMetadata && !["archived", "canceled", "deleted", "excluded", "excluido", "excluído"].includes(status);
+    return !project.is_deleted && !["archived", "canceled"].includes(String(project.status || "active"));
   });
 }
 
@@ -397,7 +391,7 @@ export function DashboardClient({ snapshot }: DashboardClientProps) {
   useEffect(() => {
     let mounted = true;
 
-    fetch("/api/projects", { cache: "no-store" })
+    fetch("/api/projects")
       .then((response) => (response.ok ? response.json() : null))
       .then((payload) => {
         if (!mounted || !payload) return;

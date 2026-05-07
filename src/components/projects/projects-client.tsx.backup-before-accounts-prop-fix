@@ -12,7 +12,6 @@ type Bundle = {
   shares: SharedItem[];
   activityLogs: ActivityLog[];
   profiles: Profile[];
-  accounts: Account[];
   currentUserId: string;
 };
 
@@ -838,7 +837,7 @@ export function ProjectsClient(props: Bundle) {
           <form className="form-grid two-columns" onSubmit={submitMovement}>
             <label className="field"><span>Tipo</span><select value={movementForm.type} onChange={(e) => setMovementForm({ ...movementForm, type: e.target.value as MovementForm["type"] })}><option value="add">Aporte</option><option value="remove">Retirada</option></select></label>
             <label className="field"><span>Valor</span><input type="number" step="0.01" min="0.01" value={movementForm.amount} onChange={(e) => setMovementForm({ ...movementForm, amount: e.target.value })} required /></label>
-            <label className="field full-span movement-account-field"><span>Conta vinculada (opcional)</span><select value={movementForm.account_id} onChange={(e) => setMovementForm({ ...movementForm, account_id: e.target.value })}><option value="">Não mexer em conta</option>{(bundle.accounts || []).map((account) => <option value={account.id} key={account.id}>{formatProjectAccountOption(account)}</option>)}</select></label> <label className="field full-span"><span>Descrição</span><input value={movementForm.description} onChange={(e) => setMovementForm({ ...movementForm, description: e.target.value })} placeholder="Ex.: aporte do mês" /></label>
+            <label className="field full-span movement-account-field"><span>Conta vinculada (opcional)</span><select value={movementForm.account_id} onChange={(e) => setMovementForm({ ...movementForm, account_id: e.target.value })}><option value="">Não mexer em conta</option>{bundle.accounts.map((account) => <option value={account.id} key={account.id}>{formatProjectAccountOption(account)}</option>)}</select></label> <label className="field full-span"><span>Descrição</span><input value={movementForm.description} onChange={(e) => setMovementForm({ ...movementForm, description: e.target.value })} placeholder="Ex.: aporte do mês" /></label>
             <div className="modal-actions full-span"><button className="btn btn-muted" type="button" onClick={() => setModal(null)}>Cancelar</button><button className="btn btn-primary" disabled={loading} type="submit">Registrar</button></div>
           </form>
         </Modal>
