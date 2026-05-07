@@ -158,7 +158,7 @@ function MonthlyProjectionPanel({
       <div className="section-heading compact-heading">
         <div>
           <h2>Projeção mensal de {year}</h2>
-          <p>Passe o mouse no mês para ver entradas, saídas, resultado e saldo ao fechar.</p>
+          <p>Ver entradas, saídas, resultado e saldo ao fechar.</p>
         </div>
 
         <span className={`badge ${negativeProjectionCount ? "badge-alert" : ""}`}>
