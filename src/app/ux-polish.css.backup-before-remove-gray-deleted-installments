@@ -922,11 +922,3 @@
     grid-template-columns: 1fr;
   }
 }
-
-
-/* no-gray-removed-installments-final */
-.installment-plan-card.is-removed,
-.installment-plan-card.is-removed * {
-  opacity: initial !important;
-  text-decoration: none !important;
-}

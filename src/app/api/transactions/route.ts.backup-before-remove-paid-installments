@@ -165,6 +165,7 @@ async function deleteCreditInstallmentPlanFromTransaction(
     .update({
       status: "canceled",
       remaining_installments: 0,
+      paid_installments: 0,
       metadata: mergeObjectMetadata(plan?.metadata, {
         deleted_globally_from_transactions: true,
         deleted_at: new Date().toISOString(),

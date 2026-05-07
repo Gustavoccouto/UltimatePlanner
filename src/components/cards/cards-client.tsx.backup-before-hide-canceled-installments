@@ -181,18 +181,7 @@ export function CardsClient({
   const activeCategories = categories.filter((category) => !category.is_deleted && !category.is_archived && ["expense", "card"].includes(category.type));
   const accountSummaries = useMemo(() => deriveAccountSummaries(activeAccounts, transactions), [activeAccounts, transactions]);
   const cardMetrics = useMemo(() => deriveCreditCardMetrics(activeCards, transactions, plans, selectedMonth, invoices), [activeCards, invoices, plans, selectedMonth, transactions]);
-  const visiblePlans = useMemo(
-    () => plans.filter((plan) => plan.payment_method === "credit_card" && plan.status !== "canceled"),
-    [plans]
-  );
-  const visibleInstallments = useMemo(
-    () => installments.filter((installment) => installment.status !== "canceled"),
-    [installments]
-  );
-  const planViews = useMemo(
-    () => buildPlanViews(visiblePlans, visibleInstallments, transactions, activeCards),
-    [activeCards, visibleInstallments, visiblePlans, transactions]
-  );
+  const planViews = useMemo(() => buildPlanViews(plans, installments, transactions, activeCards), [activeCards, installments, plans, transactions]);
   const projection = useMemo(() => buildCardFutureProjection(activeCards, transactions, selectedMonth, 4, invoices), [activeCards, invoices, selectedMonth, transactions]);
   const selectedMonthInvoices = invoices.filter((invoice) => monthKey(invoice.billing_month) === selectedMonth);
 
@@ -466,9 +455,6 @@ export function CardsClient({
         })
       });
 
-      setPlans((current) => current.filter((item) => item.id !== planId));
-      setInstallments((current) => current.filter((item) => item.installment_plan_id !== planId));
-      setTransactions((current) => current.filter((item) => item.installment_plan_id !== planId));
       setMessage("Compra parcelada inteira excluída.");
       await refreshCardsData();
     } catch (caught) {
@@ -593,8 +579,8 @@ export function CardsClient({
   <div className="installment-plan-list">
     {planViews.length ? (
       planViews.map((plan) => {
-        const isOpen = expandedPlans.has(plan.id); return (
-          <article className={`installment-plan-card ${isOpen ? "is-open" : ""}`} key={plan.id}>
+        const isOpen = expandedPlans.has(plan.id); const isRemoved = plan.status === "canceled" || (plan.remaining_count === 0 && plan.paid_count === 0); return (
+          <article className={`installment-plan-card ${isOpen ? "is-open" : ""}${isRemoved ? " is-removed" : ""}`} key={plan.id}>
             <div className="installment-plan-header">
               <button
                 className="installment-plan-summary"
@@ -617,7 +603,7 @@ export function CardsClient({
                   </small>
                 </span>
 
-                <span className="badge">{isOpen ? "Recolher detalhes" : "Ver parcelas"}</span>
+                <span className={`badge ${isRemoved ? "badge-muted" : ""}`}>{isRemoved ? "Removido" : isOpen ? "Recolher detalhes" : "Ver parcelas"}</span>
               </button>
               <br />
               <button

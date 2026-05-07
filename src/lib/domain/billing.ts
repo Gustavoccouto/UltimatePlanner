@@ -19,12 +19,13 @@ function formatDate(date: Date): string {
 }
 
 function clampDay(year: number, monthIndex: number, day: number): number {
-  return Math.min(Math.max(Number(day || 1), 1), new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate());
+  const safeDay = Math.max(Number(day || 1), 1);
+
+  return Math.min(safeDay, new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate());
 }
 
 export function normalizeBillingMonth(month: string | null | undefined): string {
   if (!month) return "";
-
   if (/^\d{4}-\d{2}$/.test(month)) return `${month}-01`;
   if (/^\d{4}-\d{2}-\d{2}$/.test(month)) return `${month.slice(0, 7)}-01`;
 
@@ -61,13 +62,14 @@ export function getCardBillingMonth(purchaseDateInput: string, closingDay: numbe
   const safeClosingDay = clampDay(purchaseYear, purchaseMonth, closingDay);
 
   /*
-   * Regra do app:
-   * - antes do fechamento: fatura do próprio mês;
-   * - no dia do fechamento ou depois: próxima fatura.
+   * Regra financeira do app:
+   * - compra antes do fechamento fica na fatura do próprio mês;
+   * - compra no dia do fechamento ou depois vai para a próxima fatura.
    *
-   * Exemplo:
-   * compra 17/04, fechamento dia 09 => fatura 05;
-   * compra 09/04, fechamento dia 09 => fatura 05.
+   * Exemplo: fechamento dia 9
+   * 08/04 => fatura 04
+   * 09/04 => fatura 05
+   * 17/04 => fatura 05
    */
   const belongsToNextInvoice = purchaseDay >= safeClosingDay;
   const invoiceMonthDate = new Date(Date.UTC(purchaseYear, purchaseMonth + (belongsToNextInvoice ? 1 : 0), 1));

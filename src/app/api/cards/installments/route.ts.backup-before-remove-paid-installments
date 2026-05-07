@@ -146,6 +146,7 @@ async function refreshPlanStatus(context: AuthedContext, planId: string, metadat
     .from("installment_plans")
     .update({
       status,
+      paid_installments: paidInstallments,
       metadata: mergeMetadata(metadata, {
         last_installment_delete_recalculated_at: new Date().toISOString()
       })
@@ -333,6 +334,7 @@ async function deleteInstallmentPlanById(context: AuthedContext, planId: string)
     .from("installment_plans")
     .update({
       status: "canceled",
+      paid_installments: 0,
       metadata: mergeMetadata(plan.metadata, {
         deleted_at: new Date().toISOString(),
         safe_delete: true,

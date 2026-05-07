@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getApiContext, jsonError, normalizeOptionalUuid, parseJson } from "@/lib/http/api";
-import { ensureCategoryByName, inferCategoryTypeFromTransaction } from "@/lib/server/categories";
+
 import { buildCreditPurchaseDrafts } from "@/lib/domain/card-ledger";
+import { getApiContext, jsonError, normalizeOptionalUuid, parseJson } from "@/lib/http/api";
+import { calculateCardLimitImpact } from "@/lib/server/card-limit";
 import { recalculateInvoicesForCardMonths } from "@/lib/server/card-ledger";
+import { ensureCategoryByName, inferCategoryTypeFromTransaction } from "@/lib/server/categories";
 
 const purchaseSchema = z.object({
   description: z.string().trim().min(1, "Descrição é obrigatória."),
@@ -14,11 +16,13 @@ const purchaseSchema = z.object({
   amount_value: z.coerce.number().positive("Valor deve ser maior que zero."),
   installments_count: z.coerce.number().int().min(1, "Informe ao menos 1 parcela."),
   purchase_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Data da compra inválida."),
-  notes: z.string().trim().optional().nullable()
+  notes: z.string().trim().optional().nullable(),
+  allow_over_limit: z.boolean().optional().default(false)
 });
 
 export async function POST(request: Request) {
   const context = await getApiContext();
+
   if ("error" in context) return context.error;
 
   try {
@@ -34,13 +38,6 @@ export async function POST(request: Request) {
 
     if (cardError || !card) return jsonError("Cartão não encontrado.", 404);
 
-    const categoryId = normalizeOptionalUuid(payload.category_id) || await ensureCategoryByName(
-      context.supabase,
-      context.user.id,
-      payload.category_name,
-      inferCategoryTypeFromTransaction("card_expense")
-    );
-
     const purchase = buildCreditPurchaseDrafts({
       description: payload.description,
       amountMode: payload.amount_mode,
@@ -53,6 +50,33 @@ export async function POST(request: Request) {
     if (purchase.totalAmount <= 0 || purchase.drafts.length === 0) {
       return jsonError("Valor e quantidade de parcelas devem ser maiores que zero.");
     }
+
+    const limitImpact = await calculateCardLimitImpact(
+      context.supabase,
+      context.user.id,
+      payload.credit_card_id,
+      purchase.totalAmount
+    );
+
+    if (limitImpact.exceeds_limit && !payload.allow_over_limit) {
+      return NextResponse.json(
+        {
+          error: limitImpact.message || "Essa compra ultrapassa o limite do cartão.",
+          code: "CARD_LIMIT_EXCEEDED",
+          data: limitImpact
+        },
+        { status: 409 }
+      );
+    }
+
+    const categoryId =
+      normalizeOptionalUuid(payload.category_id) ||
+      (await ensureCategoryByName(
+        context.supabase,
+        context.user.id,
+        payload.category_name,
+        inferCategoryTypeFromTransaction("card_expense")
+      ));
 
     const planRecord = {
       owner_id: context.user.id,
@@ -74,7 +98,12 @@ export async function POST(request: Request) {
       }
     };
 
-    const { data: plan, error: planError } = await context.supabase.from("installment_plans").insert(planRecord).select("*").single();
+    const { data: plan, error: planError } = await context.supabase
+      .from("installment_plans")
+      .insert(planRecord)
+      .select("*")
+      .single();
+
     if (planError || !plan) return jsonError(planError?.message || "Não foi possível criar o parcelamento.", 500);
 
     const installmentRows = purchase.drafts.map((draft) => ({
@@ -93,8 +122,14 @@ export async function POST(request: Request) {
       metadata: { notes: payload.notes || "" }
     }));
 
-    const { data: installments, error: installmentsError } = await context.supabase.from("installments").insert(installmentRows).select("*");
-    if (installmentsError || !installments) return jsonError(installmentsError?.message || "Não foi possível criar as parcelas.", 500);
+    const { data: installments, error: installmentsError } = await context.supabase
+      .from("installments")
+      .insert(installmentRows)
+      .select("*");
+
+    if (installmentsError || !installments) {
+      return jsonError(installmentsError?.message || "Não foi possível criar as parcelas.", 500);
+    }
 
     const transactionRows = installments.map((installment: any) => ({
       owner_id: context.user.id,
@@ -119,21 +154,30 @@ export async function POST(request: Request) {
         installment_status: "pending",
         purchase_date: payload.purchase_date,
         amount_entry_mode: payload.amount_mode,
-        amount_entry_value: payload.amount_value
+        amount_entry_value: payload.amount_value,
+        over_limit_confirmed: Boolean(payload.allow_over_limit && limitImpact.exceeds_limit)
       },
       is_deleted: false
     }));
 
-    const { data: transactions, error: transactionsError } = await context.supabase.from("transactions").insert(transactionRows).select("*");
-    if (transactionsError || !transactions) return jsonError(transactionsError?.message || "Não foi possível criar os lançamentos do cartão.", 500);
+    const { data: transactions, error: transactionsError } = await context.supabase
+      .from("transactions")
+      .insert(transactionRows)
+      .select("*");
+
+    if (transactionsError || !transactions) {
+      return jsonError(transactionsError?.message || "Não foi possível criar os lançamentos do cartão.", 500);
+    }
 
     for (const transaction of transactions) {
       if (!transaction.installment_id) continue;
+
       const { error: linkError } = await context.supabase
         .from("installments")
         .update({ transaction_id: transaction.id })
         .eq("id", transaction.installment_id)
         .eq("owner_id", context.user.id);
+
       if (linkError) return jsonError(linkError.message, 500);
     }
 
@@ -144,7 +188,21 @@ export async function POST(request: Request) {
       purchase.drafts.map((draft) => draft.billing_month)
     );
 
-    return NextResponse.json({ data: { plan, installments, transactions } }, { status: 201 });
+    const updatedLimitImpact = await calculateCardLimitImpact(
+      context.supabase,
+      context.user.id,
+      payload.credit_card_id,
+      0
+    );
+
+    return NextResponse.json(
+      {
+        data: { plan, installments, transactions },
+        limit: updatedLimitImpact,
+        warning: limitImpact.near_limit || limitImpact.exceeds_limit ? limitImpact.message : null
+      },
+      { status: 201 }
+    );
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Não foi possível lançar a compra no cartão.");
   }
