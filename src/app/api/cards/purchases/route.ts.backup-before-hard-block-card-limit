@@ -17,7 +17,8 @@ const purchaseSchema = z.object({
   installments_count: z.coerce.number().int().min(1, "Informe ao menos 1 parcela."),
   purchase_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Data da compra inválida."),
   notes: z.string().trim().optional().nullable(),
-  });
+  allow_over_limit: z.boolean().optional().default(false)
+});
 
 export async function POST(request: Request) {
   const context = await getApiContext();
@@ -57,7 +58,7 @@ export async function POST(request: Request) {
       purchase.totalAmount
     );
 
-    if (limitImpact.exceeds_limit) {
+    if (limitImpact.exceeds_limit && !payload.allow_over_limit) {
       return NextResponse.json(
         {
           error: limitImpact.message || "Essa compra ultrapassa o limite do cartão.",
@@ -154,7 +155,7 @@ export async function POST(request: Request) {
         purchase_date: payload.purchase_date,
         amount_entry_mode: payload.amount_mode,
         amount_entry_value: payload.amount_value,
-        over_limit_confirmed: false
+        over_limit_confirmed: Boolean(payload.allow_over_limit && limitImpact.exceeds_limit)
       },
       is_deleted: false
     }));
