@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+
 import { getApiContext, jsonError, mergeMetadata, parseJson } from "@/lib/http/api";
 import { assertCanEdit, assertCanManageSharing, createActivityLog } from "@/lib/server/collaboration";
 
@@ -14,32 +15,50 @@ const projectSchema = z.object({
   color: z.string().trim().optional().nullable()
 });
 
-const deleteSchema = z.object({ id: z.string().uuid("Projeto inválido.") });
+const deleteSchema = z.object({
+  id: z.string().uuid("Projeto inválido.")
+});
 
 async function safeProfiles(context: any) {
   const { data, error } = await context.supabase.rpc("visible_profiles_for_user");
+
   if (!error) return data || [];
 
-  // Compatibilidade para bancos que ainda não rodaram a migration de segurança.
   const fallback = await context.supabase
     .from("profiles")
     .select("id,email,display_name,avatar_url,created_at,updated_at")
     .eq("id", context.user.id);
+
   return fallback.data || [];
 }
 
 async function loadProjectsBundle(context: any) {
-  const [projects, items, movements, shares, logs, profiles] = await Promise.all([
+  const [projects, items, movements, shares, logs, profiles, accounts] = await Promise.all([
     context.supabase.from("projects").select("*").eq("is_deleted", false).order("created_at", { ascending: true }),
     context.supabase.from("project_items").select("*").eq("is_deleted", false).order("created_at", { ascending: true }),
     context.supabase.from("project_movements").select("*").eq("is_deleted", false).order("created_at", { ascending: false }),
     context.supabase.from("shared_items").select("*").eq("item_type", "project").order("created_at", { ascending: true }),
-    context.supabase.from("activity_logs").select("*").in("entity_type", ["project", "project_item", "project_movement"]).order("created_at", { ascending: false }).limit(300),
-    safeProfiles(context)
+    context.supabase
+      .from("activity_logs")
+      .select("*")
+      .in("entity_type", ["project", "project_item", "project_movement"])
+      .order("created_at", { ascending: false })
+      .limit(300),
+    safeProfiles(context),
+    context.supabase
+      .from("accounts")
+      .select("*")
+      .eq("owner_id", context.user.id)
+      .eq("is_deleted", false)
+      .eq("is_archived", false)
+      .order("name", { ascending: true })
   ]);
 
-  const error = projects.error || items.error || movements.error || shares.error || logs.error;
-  if (error) throw new Error(`${error.message}. Verifique se as migrations 0005 e 0007 foram rodadas no Supabase.`);
+  const error = projects.error || items.error || movements.error || shares.error || logs.error || accounts.error;
+
+  if (error) {
+    throw new Error(`${error.message}. Verifique se as migrations 0005 e 0007 foram rodadas no Supabase.`);
+  }
 
   return {
     projects: projects.data || [],
@@ -47,16 +66,19 @@ async function loadProjectsBundle(context: any) {
     movements: movements.data || [],
     shares: shares.data || [],
     activityLogs: logs.data || [],
-    profiles: profiles || []
+    profiles: profiles || [],
+    accounts: accounts.data || []
   };
 }
 
 export async function GET() {
   const context = await getApiContext();
+
   if ("error" in context) return context.error;
 
   try {
     const bundle = await loadProjectsBundle(context);
+
     return NextResponse.json(bundle);
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Não foi possível carregar projetos.", 500);
@@ -65,6 +87,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const context = await getApiContext();
+
   if ("error" in context) return context.error;
 
   try {
@@ -83,6 +106,7 @@ export async function POST(request: Request) {
     };
 
     const { data, error } = await context.supabase.from("projects").insert(record).select("*").single();
+
     if (error) return jsonError(error.message, 500);
 
     await createActivityLog(context.supabase, {
@@ -102,12 +126,12 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   const context = await getApiContext();
+
   if ("error" in context) return context.error;
 
   try {
     const payload = await parseJson(request, projectSchema.extend({ id: z.string().uuid("Projeto inválido.") }));
     const access = await assertCanEdit(context.supabase, "project", payload.id, context.user.id);
-
     const { data: existing, error: existingError } = await context.supabase
       .from("projects")
       .select("*")
@@ -122,7 +146,10 @@ export async function PATCH(request: Request) {
       status: payload.status,
       color: payload.color || null,
       image_url: payload.image_url || null,
-      metadata: mergeMetadata(existing.metadata, { icon: payload.icon || "✨", theme_key: payload.theme_key || "aurora" })
+      metadata: mergeMetadata(existing.metadata, {
+        icon: payload.icon || "✨",
+        theme_key: payload.theme_key || "aurora"
+      })
     };
 
     const { data, error } = await context.supabase
@@ -140,8 +167,16 @@ export async function PATCH(request: Request) {
       entityType: "project",
       entityId: payload.id,
       actionType: "project_updated",
-      previousValue: { name: existing.name, description: existing.description, status: existing.status },
-      newValue: { name: data.name, description: data.description, status: data.status }
+      previousValue: {
+        name: existing.name,
+        description: existing.description,
+        status: existing.status
+      },
+      newValue: {
+        name: data.name,
+        description: data.description,
+        status: data.status
+      }
     });
 
     return NextResponse.json({ data });
@@ -152,12 +187,12 @@ export async function PATCH(request: Request) {
 
 export async function DELETE(request: Request) {
   const context = await getApiContext();
+
   if ("error" in context) return context.error;
 
   try {
     const payload = await parseJson(request, deleteSchema);
     const access = await assertCanManageSharing(context.supabase, "project", payload.id, context.user.id);
-
     const { error } = await context.supabase
       .from("projects")
       .update({ is_deleted: true, status: "archived" })

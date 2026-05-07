@@ -1,13 +1,192 @@
-import type { CreditCard, RecurringRule } from "@/lib/domain/app-types";
-import { buildOccurrences, buildRecurringTransactionDraft, getNextOccurrenceDate, todayInput } from "@/lib/domain/planning";
+import type { CreditCard, RecurringRule, Transaction } from "@/lib/domain/app-types";
+import {
+  buildOccurrences,
+  buildRecurringTransactionDraft,
+  getNextOccurrenceDate,
+  todayInput
+} from "@/lib/domain/planning";
 import { recalculateInvoicesForCardMonths } from "@/lib/server/card-ledger";
 
 type SupabaseLike = {
   from: (table: string) => any;
 };
 
+type RecurringRuleLike = Pick<
+  RecurringRule,
+  | "id"
+  | "name"
+  | "rule_type"
+  | "target_type"
+  | "account_id"
+  | "credit_card_id"
+  | "category_id"
+  | "amount"
+  | "frequency"
+  | "start_date"
+  | "end_date"
+  | "notes"
+  | "metadata"
+>;
+
+type BillingCard = Pick<CreditCard, "id" | "name" | "closing_day" | "due_day" | "limit_amount">;
+
+export type RecurringCardLimitImpact = {
+  card_id: string;
+  card_name: string;
+  limit_amount: number;
+  used_limit: number;
+  available_limit: number;
+  recurring_amount: number;
+  occurrences_count: number;
+  projected_used_limit: number;
+  projected_available_limit: number;
+  exceeds_limit: boolean;
+};
+
+function money(value: number | string | null | undefined) {
+  const parsed = Number(value || 0);
+
+  return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : 0;
+}
+
+function currencyBRL(value: number) {
+  return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
 function normalizeMetadata(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function isCardRecurringExpense(rule: Pick<RecurringRule, "rule_type" | "target_type" | "credit_card_id">) {
+  return rule.rule_type === "recurring_expense" && rule.target_type === "card" && Boolean(rule.credit_card_id);
+}
+
+async function readCard(supabase: SupabaseLike, ownerId: string, cardId: string) {
+  const { data, error } = await supabase
+    .from("credit_cards")
+    .select("*")
+    .eq("owner_id", ownerId)
+    .eq("id", cardId)
+    .eq("is_deleted", false)
+    .single();
+
+  if (error || !data) {
+    throw new Error("Cartão não encontrado para validar limite da recorrência.");
+  }
+
+  return data as BillingCard;
+}
+
+async function usedLimitForCard(
+  supabase: SupabaseLike,
+  ownerId: string,
+  cardId: string,
+  options?: { excludeRecurringRuleId?: string }
+) {
+  const { data, error } = await supabase
+    .from("transactions")
+    .select("amount,recurring_rule_id")
+    .eq("owner_id", ownerId)
+    .eq("credit_card_id", cardId)
+    .eq("type", "card_expense")
+    .eq("is_deleted", false)
+    .eq("is_paid", false)
+    .neq("status", "canceled");
+
+  if (error) throw new Error(error.message);
+
+  return money(
+    (data || [])
+      .filter((transaction: { recurring_rule_id?: string | null }) => {
+        return !options?.excludeRecurringRuleId || transaction.recurring_rule_id !== options.excludeRecurringRuleId;
+      })
+      .reduce((sum: number, transaction: { amount: number | string }) => sum + money(transaction.amount), 0)
+  );
+}
+
+export async function calculateRecurringCardLimitImpact(
+  supabase: SupabaseLike,
+  ownerId: string,
+  rule: RecurringRuleLike,
+  options?: { excludeRecurringRuleId?: string }
+): Promise<RecurringCardLimitImpact | null> {
+  if (!isCardRecurringExpense(rule) || !rule.credit_card_id) {
+    return null;
+  }
+
+  const card = await readCard(supabase, ownerId, rule.credit_card_id);
+  const usedLimit = await usedLimitForCard(supabase, ownerId, card.id, options);
+  const occurrences = buildOccurrences(rule);
+  const recurringAmount = money(occurrences.length * money(rule.amount));
+  const limitAmount = money(card.limit_amount);
+  const projectedUsed = money(usedLimit + recurringAmount);
+
+  return {
+    card_id: card.id,
+    card_name: card.name || "Cartão",
+    limit_amount: limitAmount,
+    used_limit: usedLimit,
+    available_limit: money(limitAmount - usedLimit),
+    recurring_amount: recurringAmount,
+    occurrences_count: occurrences.length,
+    projected_used_limit: projectedUsed,
+    projected_available_limit: money(limitAmount - projectedUsed),
+    exceeds_limit: limitAmount > 0 && projectedUsed > limitAmount
+  };
+}
+
+export async function assertRecurringCardLimitAvailable(
+  supabase: SupabaseLike,
+  ownerId: string,
+  rule: RecurringRuleLike,
+  options?: { excludeRecurringRuleId?: string }
+) {
+  const impact = await calculateRecurringCardLimitImpact(supabase, ownerId, rule, options);
+
+  if (!impact || !impact.exceeds_limit) {
+    return impact;
+  }
+
+  throw new Error(
+    [
+      "Essa recorrência ultrapassa o limite disponível do cartão.",
+      `Cartão: ${impact.card_name}.`,
+      `Limite disponível: ${currencyBRL(impact.available_limit)}.`,
+      `Impacto da recorrência no período projetado: ${currencyBRL(impact.recurring_amount)}.`
+    ].join(" ")
+  );
+}
+
+async function assertMaterializationFitsCardLimits(
+  supabase: SupabaseLike,
+  ownerId: string,
+  transactionRows: Array<{ credit_card_id?: string | null; amount?: number | string | null }>
+) {
+  const totalsByCard = new Map<string, number>();
+
+  for (const transaction of transactionRows) {
+    if (!transaction.credit_card_id) continue;
+
+    totalsByCard.set(transaction.credit_card_id, money((totalsByCard.get(transaction.credit_card_id) || 0) + money(transaction.amount)));
+  }
+
+  for (const [cardId, newAmount] of totalsByCard.entries()) {
+    const card = await readCard(supabase, ownerId, cardId);
+    const usedLimit = await usedLimitForCard(supabase, ownerId, cardId);
+    const limitAmount = money(card.limit_amount);
+    const projectedUsed = money(usedLimit + newAmount);
+
+    if (limitAmount > 0 && projectedUsed > limitAmount) {
+      throw new Error(
+        [
+          "As recorrências futuras ultrapassam o limite disponível do cartão.",
+          `Cartão: ${card.name || "Cartão"}.`,
+          `Limite disponível: ${currencyBRL(limitAmount - usedLimit)}.`,
+          `Impacto a gerar: ${currencyBRL(newAmount)}.`
+        ].join(" ")
+      );
+    }
+  }
 }
 
 export async function materializeRecurringRules(supabase: SupabaseLike, ownerId: string, ruleIds?: string[]) {
@@ -21,38 +200,42 @@ export async function materializeRecurringRules(supabase: SupabaseLike, ownerId:
   if (ruleIds?.length) query = query.in("id", ruleIds);
 
   const { data: rules, error: rulesError } = await query;
+
   if (rulesError) throw new Error(rulesError.message);
 
   const activeRules = (rules || []) as RecurringRule[];
+
   if (!activeRules.length) return { created: 0, updatedRules: 0, touchedCardMonths: 0 };
 
-  const [{ data: cards, error: cardsError }, { data: existingTransactions, error: transactionsError }] = await Promise.all([
-    supabase.from("credit_cards").select("*").eq("owner_id", ownerId).eq("is_deleted", false),
-    supabase.from("transactions").select("*").eq("owner_id", ownerId).eq("is_deleted", false)
-  ]);
+  const [{ data: cards, error: cardsError }, { data: existingTransactions, error: transactionsError }] =
+    await Promise.all([
+      supabase.from("credit_cards").select("*").eq("owner_id", ownerId).eq("is_deleted", false),
+      supabase.from("transactions").select("*").eq("owner_id", ownerId).eq("is_deleted", false)
+    ]);
 
   if (cardsError) throw new Error(cardsError.message);
   if (transactionsError) throw new Error(transactionsError.message);
 
-  type BillingCard = Pick<CreditCard, "closing_day" | "due_day">;
-  const cardEntries: Array<[string, BillingCard]> = ((cards || []) as CreditCard[])
-    .filter((card) => Boolean(card.id))
-    .map((card) => [
-      card.id,
-      {
-        closing_day: Number(card.closing_day || 1),
-        due_day: Number(card.due_day || 1)
-      }
-    ]);
-  const cardsById = new Map<string, BillingCard>(cardEntries);
-  const existingKeys = new Set(
-    (existingTransactions || [])
-      .filter((transaction: any) => transaction.recurrence_key)
-      .map((transaction: any) => transaction.recurrence_key)
+  const cardsById = new Map<string, Pick<CreditCard, "closing_day" | "due_day">>(
+    ((cards || []) as CreditCard[])
+      .filter((card) => Boolean(card.id))
+      .map((card) => [
+        card.id,
+        {
+          closing_day: Number(card.closing_day || 1),
+          due_day: Number(card.due_day || 1)
+        }
+      ])
   );
 
-  const transactionRows: any[] = [];
-  const ruleUpdates: Array<Promise<unknown>> = [];
+  const existingKeys = new Set(
+    (existingTransactions || [])
+      .filter((transaction: Transaction) => transaction.recurrence_key)
+      .map((transaction: Transaction) => transaction.recurrence_key)
+  );
+
+  const transactionRows: Array<Record<string, unknown>> = [];
+  const ruleUpdates: Array<PromiseLike<unknown>> = [];
   const touchedCardMonths = new Map<string, Set<string>>();
 
   for (const rule of activeRules) {
@@ -60,10 +243,12 @@ export async function materializeRecurringRules(supabase: SupabaseLike, ownerId:
 
     for (const occurrenceDate of occurrences) {
       const recurrenceKey = `${rule.id}__${occurrenceDate}`;
+
       if (existingKeys.has(recurrenceKey)) continue;
 
       const card = rule.credit_card_id ? cardsById.get(rule.credit_card_id) : null;
       const draft = buildRecurringTransactionDraft(rule, occurrenceDate, card || null);
+
       transactionRows.push({ owner_id: ownerId, ...draft });
       existingKeys.add(recurrenceKey);
 
@@ -73,7 +258,8 @@ export async function materializeRecurringRules(supabase: SupabaseLike, ownerId:
       }
     }
 
-    const nextOccurrence = getNextOccurrenceDate(rule, [...(existingTransactions || []), ...transactionRows]);
+    const nextOccurrence = getNextOccurrenceDate(rule, [...((existingTransactions || []) as Transaction[]), ...(transactionRows as Transaction[])]);
+
     ruleUpdates.push(
       supabase
         .from("recurring_rules")
@@ -84,7 +270,10 @@ export async function materializeRecurringRules(supabase: SupabaseLike, ownerId:
   }
 
   if (transactionRows.length) {
+    await assertMaterializationFitsCardLimits(supabase, ownerId, transactionRows);
+
     const { error: insertError } = await supabase.from("transactions").insert(transactionRows);
+
     if (insertError) throw new Error(insertError.message);
   }
 
@@ -97,7 +286,12 @@ export async function materializeRecurringRules(supabase: SupabaseLike, ownerId:
   return { created: transactionRows.length, updatedRules: ruleUpdates.length, touchedCardMonths: touchedCardMonths.size };
 }
 
-export async function cleanupFutureRecurringTransactions(supabase: SupabaseLike, ownerId: string, ruleId: string, fromDate = todayInput()) {
+export async function cleanupFutureRecurringTransactions(
+  supabase: SupabaseLike,
+  ownerId: string,
+  ruleId: string,
+  fromDate = todayInput()
+) {
   const { data: rows, error: readError } = await supabase
     .from("transactions")
     .select("id, credit_card_id, billing_month")
@@ -109,6 +303,7 @@ export async function cleanupFutureRecurringTransactions(supabase: SupabaseLike,
   if (readError) throw new Error(readError.message);
 
   const touchedCardMonths = new Map<string, Set<string>>();
+
   for (const row of rows || []) {
     if (row.credit_card_id && row.billing_month) {
       if (!touchedCardMonths.has(row.credit_card_id)) touchedCardMonths.set(row.credit_card_id, new Set());
@@ -116,13 +311,15 @@ export async function cleanupFutureRecurringTransactions(supabase: SupabaseLike,
     }
   }
 
-  const ids = (rows || []).map((row: any) => row.id);
+  const ids = (rows || []).map((row: { id: string }) => row.id);
+
   if (ids.length) {
     const { error } = await supabase
       .from("transactions")
       .update({ is_deleted: true, status: "canceled" })
       .eq("owner_id", ownerId)
       .in("id", ids);
+
     if (error) throw new Error(error.message);
   }
 

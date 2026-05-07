@@ -171,42 +171,6 @@ function activityLabel(log: ActivityLog, profile?: Profile) {
   }
 }
 
-
-function formatProjectAccountCurrency(value: unknown) {
-  const parsed = Number(value || 0);
-  const safeValue = Number.isFinite(parsed) ? parsed : 0;
-
-  return safeValue.toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL"
-  });
-}
-
-function getProjectAccountBalance(account: {
-  balance?: number | string | null;
-  current_balance?: number | string | null;
-  derived_balance?: number | string | null;
-  initial_balance?: number | string | null;
-}) {
-  return (
-    account.derived_balance ??
-    account.current_balance ??
-    account.balance ??
-    account.initial_balance ??
-    0
-  );
-}
-
-function formatProjectAccountOption(account: {
-  name?: string | null;
-  balance?: number | string | null;
-  current_balance?: number | string | null;
-  derived_balance?: number | string | null;
-  initial_balance?: number | string | null;
-}) {
-  return `${account.name || "Conta"} - ${formatProjectAccountCurrency(getProjectAccountBalance(account))} (saldo em conta)`;
-}
-
 export function ProjectsClient(props: Bundle) {
   const [bundle, setBundle] = useState<Bundle>(props);
   const [selectedProjectId, setSelectedProjectId] = useState(props.projects[0]?.id || "");
@@ -638,7 +602,7 @@ export function ProjectsClient(props: Bundle) {
                   <div className="grid">
                     <div className="section-heading">
                       <div><h2>Finanças do projeto</h2><p>Aportes e retiradas funcionam como caixa do projeto. Vincule uma conta para também gerar transação nas finanças.</p></div>
-                      <div className="header-actions project-finance-actions">
+                      <div className="header-actions">
                         {canEditSelected ? <button className="btn btn-primary" type="button" onClick={() => openMovementCreate("add")}>+ Aporte</button> : null}
                         {canEditSelected ? <button className="btn btn-muted" type="button" onClick={() => openMovementCreate("remove")}>- Retirada</button> : null}
                       </div>
@@ -713,7 +677,7 @@ export function ProjectsClient(props: Bundle) {
           <form className="form-grid two-columns" onSubmit={submitMovement}>
             <label className="field"><span>Tipo</span><select value={movementForm.type} onChange={(e) => setMovementForm({ ...movementForm, type: e.target.value as MovementForm["type"] })}><option value="add">Aporte</option><option value="remove">Retirada</option></select></label>
             <label className="field"><span>Valor</span><input type="number" step="0.01" min="0.01" value={movementForm.amount} onChange={(e) => setMovementForm({ ...movementForm, amount: e.target.value })} required /></label>
-            <label className="field full-span movement-account-field"><span>Conta vinculada (opcional)</span><select value={movementForm.account_id} onChange={(e) => setMovementForm({ ...movementForm, account_id: e.target.value })}><option value="">Não mexer em conta</option>{bundle.accounts.map((account) => <option value={account.id} key={account.id}>{formatProjectAccountOption(account)}</option>)}</select></label> <label className="field full-span"><span>Descrição</span><input value={movementForm.description} onChange={(e) => setMovementForm({ ...movementForm, description: e.target.value })} placeholder="Ex.: aporte do mês" /></label>
+            <label className="field"><span>Conta vinculada (opcional)</span><select value={movementForm.account_id} onChange={(e) => setMovementForm({ ...movementForm, account_id: e.target.value })}><option value="">Não mexer em conta</option>{bundle.accounts.map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label> <label className="field full-span"><span>Descrição</span><input value={movementForm.description} onChange={(e) => setMovementForm({ ...movementForm, description: e.target.value })} placeholder="Ex.: aporte do mês" /></label>
             <div className="modal-actions full-span"><button className="btn btn-muted" type="button" onClick={() => setModal(null)}>Cancelar</button><button className="btn btn-primary" disabled={loading} type="submit">Registrar</button></div>
           </form>
         </Modal>

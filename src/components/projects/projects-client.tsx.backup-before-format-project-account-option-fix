@@ -171,42 +171,6 @@ function activityLabel(log: ActivityLog, profile?: Profile) {
   }
 }
 
-
-function formatProjectAccountCurrency(value: unknown) {
-  const parsed = Number(value || 0);
-  const safeValue = Number.isFinite(parsed) ? parsed : 0;
-
-  return safeValue.toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL"
-  });
-}
-
-function getProjectAccountBalance(account: {
-  balance?: number | string | null;
-  current_balance?: number | string | null;
-  derived_balance?: number | string | null;
-  initial_balance?: number | string | null;
-}) {
-  return (
-    account.derived_balance ??
-    account.current_balance ??
-    account.balance ??
-    account.initial_balance ??
-    0
-  );
-}
-
-function formatProjectAccountOption(account: {
-  name?: string | null;
-  balance?: number | string | null;
-  current_balance?: number | string | null;
-  derived_balance?: number | string | null;
-  initial_balance?: number | string | null;
-}) {
-  return `${account.name || "Conta"} - ${formatProjectAccountCurrency(getProjectAccountBalance(account))} (saldo em conta)`;
-}
-
 export function ProjectsClient(props: Bundle) {
   const [bundle, setBundle] = useState<Bundle>(props);
   const [selectedProjectId, setSelectedProjectId] = useState(props.projects[0]?.id || "");

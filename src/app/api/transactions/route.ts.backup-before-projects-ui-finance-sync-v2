@@ -37,74 +37,6 @@ type TransactionRow = {
   metadata?: unknown;
 };
 
-type LinkedProjectMovementRef = {
-  projectMovementId: string | null;
-  projectId: string | null;
-};
-
-function extractLinkedProjectMovement(metadata: unknown): LinkedProjectMovementRef {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-    return { projectMovementId: null, projectId: null };
-  }
-
-  const value = metadata as Record<string, unknown>;
-  const projectMovementId =
-    typeof value.project_movement_id === "string" ? value.project_movement_id : null;
-  const projectId = typeof value.project_id === "string" ? value.project_id : null;
-  const source = typeof value.source === "string" ? value.source : null;
-
-  if (source !== "project_movement" && !projectMovementId) {
-    return { projectMovementId: null, projectId: null };
-  }
-
-  return { projectMovementId, projectId };
-}
-
-async function recalculateProjectCash(supabase: any, projectId: string) {
-  const { data, error } = await supabase
-    .from("project_movements")
-    .select("type, amount")
-    .eq("project_id", projectId)
-    .eq("is_deleted", false);
-
-  if (error) throw new Error(error.message);
-
-  const balance = (data || []).reduce((sum: number, item: { type?: string | null; amount?: number | string | null }) => {
-    const amount = Number(item.amount || 0);
-    if (item.type === "remove") return sum - amount;
-    return sum + amount;
-  }, 0);
-
-  const { error: updateError } = await supabase
-    .from("projects")
-    .update({ current_amount: balance })
-    .eq("id", projectId);
-
-  if (updateError) throw new Error(updateError.message);
-}
-
-async function syncDeleteLinkedProjectMovement(
-  supabase: any,
-  ownerId: string,
-  metadata: unknown
-) {
-  const linked = extractLinkedProjectMovement(metadata);
-
-  if (!linked.projectMovementId || !linked.projectId) return;
-
-  const { error } = await supabase
-    .from("project_movements")
-    .update({ is_deleted: true })
-    .eq("owner_id", ownerId)
-    .eq("id", linked.projectMovementId)
-    .eq("is_deleted", false);
-
-  if (error) throw new Error(error.message);
-
-  await recalculateProjectCash(supabase, linked.projectId);
-}
-
-
 function validateTransactionRelationships(payload: TransactionPayload) {
   if (["income", "expense", "adjust", "invoice_payment"].includes(payload.type) && !payload.account_id) {
     throw new Error("Selecione uma conta.");
@@ -450,8 +382,6 @@ export async function DELETE(request: Request) {
     if (existingError || !existing) return jsonError("Transação não encontrada.", 404);
 
     const transaction = existing as TransactionRow;
-
-    await syncDeleteLinkedProjectMovement(context.supabase, context.user.id, transaction.metadata);
 
     if (transaction.type === "card_expense" && transaction.installment_plan_id) {
       const deletedPlan = await deleteCreditInstallmentPlanFromTransaction(context, transaction);
