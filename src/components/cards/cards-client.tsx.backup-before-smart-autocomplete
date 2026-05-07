@@ -491,16 +491,6 @@ export function CardsClient({
 
   return (
     <div className="grid">
-      <datalist id="finance-category-suggestions">
-        {(categories || []).map((category) => (
-          <option value={category.name} key={category.id} />
-        ))}
-      </datalist>
-      <datalist id="finance-description-suggestions">
-        {Array.from(new Set((transactions || []).map((transaction) => transaction.description).filter(Boolean))).slice(0, 40).map((description) => (
-          <option value={String(description)} key={String(description)} />
-        ))}
-      </datalist>
       <header className="page-header">
         <div>
           <h1 className="page-title">Cartões</h1>
@@ -804,7 +794,7 @@ export function CardsClient({
           <div className="modal-card">
             <div className="modal-header"><div><h2>Nova compra no cartão</h2><p>Lance compras únicas ou parceladas. Cada parcela vira um item expandível e sincronizável.</p></div><button className="icon-button" onClick={closeModal}>×</button></div>
             <form onSubmit={submitPurchase} className="form-grid two-columns">
-              <div className="field full-span"><label>Descrição</label><input list="finance-description-suggestions" value={purchaseForm.description} onChange={(e) => setPurchaseForm({ ...purchaseForm, description: e.target.value })} required /></div>
+              <div className="field full-span"><label>Descrição</label><input value={purchaseForm.description} onChange={(e) => setPurchaseForm({ ...purchaseForm, description: e.target.value })} required /></div>
               <div className="field"><label>Cartão</label><select value={purchaseForm.credit_card_id} onChange={(e) => setPurchaseForm({ ...purchaseForm, credit_card_id: e.target.value })}>{activeCards.map((card) => <option key={card.id} value={card.id}>{card.name}</option>)}</select></div>
               <CategoryInputField id="card-purchase-category" value={purchaseForm.category_name} categories={activeCategories} onChange={(category_name) => setPurchaseForm({ ...purchaseForm, category_name, category_id: findCategoryIdByName(categories, category_name) })} />
               <div className="field"><label>Como informar o valor</label><select value={purchaseForm.amount_mode} onChange={(e) => setPurchaseForm({ ...purchaseForm, amount_mode: e.target.value as PurchaseForm["amount_mode"] })}><option value="total">Valor total</option><option value="installment">Valor de cada parcela</option></select></div>
@@ -836,7 +826,7 @@ export function CardsClient({
       ) : null}
 
       {modal === "installment-edit" && installmentEditForm ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-card"><div className="modal-header"><div><h2>Editar parcela do crédito</h2><p>Ajuste apenas esta parcela sem recriar a compra inteira.</p></div><button className="icon-button" onClick={closeModal}>×</button></div><form onSubmit={submitInstallmentEdit} className="form-grid two-columns"><div className="field full-span"><label>Descrição</label><input list="finance-description-suggestions" value={installmentEditForm.description} onChange={(e) => setInstallmentEditForm({ ...installmentEditForm, description: e.target.value })} /></div><div className="field"><label>Valor</label><input type="number" step="0.01" value={installmentEditForm.amount} onChange={(e) => setInstallmentEditForm({ ...installmentEditForm, amount: e.target.value })} /></div><div className="field"><label>Data da parcela</label><input type="date" value={installmentEditForm.due_date} onChange={(e) => setInstallmentEditForm({ ...installmentEditForm, due_date: e.target.value })} /></div><div className="field"><label>Competência da fatura</label><input type="month" value={installmentEditForm.billing_month} onChange={(e) => setInstallmentEditForm({ ...installmentEditForm, billing_month: e.target.value })} /></div><CategoryInputField id="card-installment-category" value={installmentEditForm.category_name} categories={activeCategories} onChange={(category_name) => setInstallmentEditForm({ ...installmentEditForm, category_name, category_id: findCategoryIdByName(categories, category_name) })} /><div className="field full-span"><label>Observações</label><textarea value={installmentEditForm.notes} onChange={(e) => setInstallmentEditForm({ ...installmentEditForm, notes: e.target.value })} /></div><div className="modal-actions full-span"><button className="btn btn-muted" type="button" onClick={closeModal}>Cancelar</button><button className="btn btn-primary" disabled={loading}>Salvar parcela</button></div></form></div></div>
+        <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-card"><div className="modal-header"><div><h2>Editar parcela do crédito</h2><p>Ajuste apenas esta parcela sem recriar a compra inteira.</p></div><button className="icon-button" onClick={closeModal}>×</button></div><form onSubmit={submitInstallmentEdit} className="form-grid two-columns"><div className="field full-span"><label>Descrição</label><input value={installmentEditForm.description} onChange={(e) => setInstallmentEditForm({ ...installmentEditForm, description: e.target.value })} /></div><div className="field"><label>Valor</label><input type="number" step="0.01" value={installmentEditForm.amount} onChange={(e) => setInstallmentEditForm({ ...installmentEditForm, amount: e.target.value })} /></div><div className="field"><label>Data da parcela</label><input type="date" value={installmentEditForm.due_date} onChange={(e) => setInstallmentEditForm({ ...installmentEditForm, due_date: e.target.value })} /></div><div className="field"><label>Competência da fatura</label><input type="month" value={installmentEditForm.billing_month} onChange={(e) => setInstallmentEditForm({ ...installmentEditForm, billing_month: e.target.value })} /></div><CategoryInputField id="card-installment-category" value={installmentEditForm.category_name} categories={activeCategories} onChange={(category_name) => setInstallmentEditForm({ ...installmentEditForm, category_name, category_id: findCategoryIdByName(categories, category_name) })} /><div className="field full-span"><label>Observações</label><textarea value={installmentEditForm.notes} onChange={(e) => setInstallmentEditForm({ ...installmentEditForm, notes: e.target.value })} /></div><div className="modal-actions full-span"><button className="btn btn-muted" type="button" onClick={closeModal}>Cancelar</button><button className="btn btn-primary" disabled={loading}>Salvar parcela</button></div></form></div></div>
       ) : null}
 
       {modal === "installment-payment" && installmentPaymentForm ? (

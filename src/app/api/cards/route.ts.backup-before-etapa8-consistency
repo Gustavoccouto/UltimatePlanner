@@ -152,7 +152,7 @@ export async function DELETE(request: Request) {
       await recalculateInvoicesForCardMonths(context.supabase, context.user.id, result.card_id, result.billing_months);
     }
 
-    return NextResponse.json({ ok: true, behavior: "card_deleted_installments_preserved_as_debt" });
+    return NextResponse.json({ ok: true, behavior: "card_archived_installments_preserved_as_debt" });
   } catch (error) {
     return jsonError(error instanceof Error ? friendlyDatabaseError(error.message) : "Não foi possível excluir o cartão.");
   }

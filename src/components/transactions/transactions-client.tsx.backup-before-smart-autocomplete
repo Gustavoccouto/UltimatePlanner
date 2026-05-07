@@ -606,16 +606,6 @@ export function TransactionsClient({
 
   return (
     <div className="grid">
-      <datalist id="finance-category-suggestions">
-        {(categories || []).map((category) => (
-          <option value={category.name} key={category.id} />
-        ))}
-      </datalist>
-      <datalist id="finance-description-suggestions">
-        {Array.from(new Set((transactions || []).map((transaction) => transaction.description).filter(Boolean))).slice(0, 40).map((description) => (
-          <option value={String(description)} key={String(description)} />
-        ))}
-      </datalist>
       <header className="page-header">
         <div>
           <h1 className="page-title">Transações</h1>
@@ -813,7 +803,7 @@ export function TransactionsClient({
               <button className="icon-button" type="button" onClick={() => setModal(null)}>Fechar</button>
             </div>
             <div className="form-grid two-columns">
-              <label className="field full-span">Descrição<input list="finance-description-suggestions" value={transactionForm.description} onChange={(event) => setTransactionForm((current) => ({ ...current, description: event.target.value }))} required /></label>
+              <label className="field full-span">Descrição<input value={transactionForm.description} onChange={(event) => setTransactionForm((current) => ({ ...current, description: event.target.value }))} required /></label>
               <label className="field">Tipo<select value={transactionForm.type} onChange={(event) => setTransactionForm((current) => ({ ...current, type: event.target.value as TransactionForm["type"] }))}><option value="expense">Despesa</option><option value="income">Receita</option><option value="transfer">Transferência</option><option value="adjust">Ajuste</option></select></label>
               <label className="field">Valor<input type="number" step="0.01" min="0.01" value={transactionForm.amount} onChange={(event) => setTransactionForm((current) => ({ ...current, amount: event.target.value }))} required /></label>
               <label className="field">Conta origem<select value={transactionForm.account_id} onChange={(event) => setTransactionForm((current) => ({ ...current, account_id: event.target.value }))} required><option value="">Selecione</option>{activeAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
@@ -862,7 +852,7 @@ export function TransactionsClient({
               <button className="icon-button" type="button" onClick={() => setModal(null)}>Fechar</button>
             </div>
             <div className="form-grid two-columns">
-              <label className="field full-span">Descrição<input list="finance-description-suggestions" value={debitForm.description} onChange={(event) => setDebitForm((current) => ({ ...current, description: event.target.value }))} required /></label>
+              <label className="field full-span">Descrição<input value={debitForm.description} onChange={(event) => setDebitForm((current) => ({ ...current, description: event.target.value }))} required /></label>
               <label className="field">Conta<select value={debitForm.account_id} onChange={(event) => setDebitForm((current) => ({ ...current, account_id: event.target.value }))} required><option value="">Selecione</option>{activeAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
               <CategoryInputField id="debit-category" value={debitForm.category_name} categories={activeCategories} onChange={(category_name) => setDebitForm((current) => ({ ...current, category_name, category_id: findCategoryIdByName(categories, category_name) }))} />
               <label className="field">Como informar o valor<select value={debitForm.amount_mode} onChange={(event) => setDebitForm((current) => ({ ...current, amount_mode: event.target.value as DebitInstallmentForm["amount_mode"] }))}><option value="total">Valor total</option><option value="installment">Valor de cada parcela</option></select></label>
@@ -885,7 +875,7 @@ export function TransactionsClient({
               <button className="icon-button" type="button" onClick={() => setModal(null)}>Fechar</button>
             </div>
             <div className="form-grid two-columns">
-              <label className="field full-span">Descrição<input list="finance-description-suggestions" value={debitEditForm.description} onChange={(event) => setDebitEditForm((current) => ({ ...current, description: event.target.value }))} required /></label>
+              <label className="field full-span">Descrição<input value={debitEditForm.description} onChange={(event) => setDebitEditForm((current) => ({ ...current, description: event.target.value }))} required /></label>
               <label className="field">Valor<input type="number" min="0.01" step="0.01" value={debitEditForm.amount} onChange={(event) => setDebitEditForm((current) => ({ ...current, amount: event.target.value }))} required /></label>
               <label className="field">Data<input type="date" value={debitEditForm.due_date} onChange={(event) => setDebitEditForm((current) => ({ ...current, due_date: event.target.value }))} required /></label>
               <CategoryInputField id="debit-edit-category" value={debitEditForm.category_name} categories={activeCategories} onChange={(category_name) => setDebitEditForm((current) => ({ ...current, category_name, category_id: findCategoryIdByName(categories, category_name) }))} />

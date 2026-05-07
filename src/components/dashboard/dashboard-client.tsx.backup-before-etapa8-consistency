@@ -1,0 +1,761 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+import { labelTransactionType } from "@/lib/domain/account-balances";
+import type { FinancialSnapshotInput } from "@/lib/domain/financial-insights";
+import { buildDashboardReferenceSummary } from "@/lib/domain/financial-insights";
+import { currencyBRL, datePt, monthInput, monthLabel, percent, todayInput } from "@/lib/domain/formatters";
+
+type DashboardClientProps = { snapshot: FinancialSnapshotInput };
+
+type ProjectionMonthView = {
+  month: string;
+  shortLabel: string;
+  projectedEntries: number;
+  projectedOutgoing: number;
+  projectedResult: number;
+  projectedClosingBalance: number;
+  isNegative: boolean;
+  isSelected: boolean;
+};
+
+type DistributionItem = {
+  label: string;
+  value: number;
+  helper: string;
+  tone: "income" | "expense" | "card" | "neutral";
+};
+
+const MONTH_SHORT_LABELS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+
+function monthEnd(month: string) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  if (!year || !monthNumber) return todayInput();
+  return new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
+}
+
+function clampPercent(value: number) {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function remainingMonthsOfYear(month: string) {
+  const [year, selectedMonth] = month.split("-").map(Number);
+  if (!year || !selectedMonth) return [monthInput()];
+  return Array.from({ length: 12 - selectedMonth + 1 }, (_, index) => {
+    const currentMonth = String(selectedMonth + index).padStart(2, "0");
+    return `${year}-${currentMonth}`;
+  });
+}
+
+function monthShortLabel(month: string) {
+  const monthNumber = Number(month.slice(5, 7));
+  return MONTH_SHORT_LABELS[monthNumber - 1] || month;
+}
+
+function projectionTooltip(view: ProjectionMonthView) {
+  return [
+    monthLabel(view.month),
+    `Entradas previstas: ${currencyBRL(view.projectedEntries)}`,
+    `Saídas previstas: ${currencyBRL(view.projectedOutgoing)}`,
+    `Resultado: ${currencyBRL(view.projectedResult)}`,
+    `Saldo ao fechar: ${currencyBRL(view.projectedClosingBalance)}`
+  ].join("\n");
+}
+
+function StatCard({ label, value, helper }: { label: string; value: string; helper?: string }) {
+  return (
+    <article className="stat-card">
+      <div className="stat-label">{label}</div>
+      <div className="stat-value">{value}</div>
+      {helper ? <p className="muted-line">{helper}</p> : null}
+    </article>
+  );
+}
+
+function SplitPanel({ label, value, helper, tone }: { label: string; value: string; helper: string; tone: "income" | "expense" }) {
+  return (
+    <article className={`flow-split-panel ${tone === "income" ? "flow-income" : "flow-expense"}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <p>{helper}</p>
+    </article>
+  );
+}
+
+function DistributionPanel({ items }: { items: DistributionItem[] }) {
+  const maxValue = Math.max(...items.map((item) => Math.abs(item.value)), 1);
+
+  return (
+    <section className="panel dashboard-chart-card dashboard-distribution-panel">
+      <div className="section-heading compact-heading">
+        <div>
+          <h2>Composição do mês</h2>
+          <p>Entradas, saídas, cartão e faturas no mesmo olhar.</p>
+        </div>
+      </div>
+
+      <div className="dashboard-distribution-list">
+        {items.map((item) => {
+          const width = clampPercent((Math.abs(item.value) / maxValue) * 100);
+
+          return (
+            <article className={`dashboard-distribution-row tone-${item.tone}`} key={item.label}>
+              <div>
+                <strong>{item.label}</strong>
+                <small>{item.helper}</small>
+              </div>
+              <b>{currencyBRL(item.value)}</b>
+              <span className="dashboard-distribution-track" aria-hidden="true">
+                <i style={{ width: `${width}%` }} />
+              </span>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function HealthPanel({ score, title, helper, margin }: { score: number; title: string; helper: string; margin: number }) {
+  return (
+    <section className="panel dashboard-chart-card dashboard-health-panel">
+      <div className="section-heading compact-heading">
+        <div>
+          <h2>Saúde do caixa</h2>
+          <p>Folga entre saldo projetado e faturas abertas.</p>
+        </div>
+      </div>
+
+      <div className="dashboard-health-body">
+        <div className="dashboard-health-ring" style={{ "--score": `${score}%` } as React.CSSProperties}>
+          <span>{score}%</span>
+        </div>
+
+        <div className="dashboard-health-copy">
+          <strong>{title}</strong>
+          <p>{helper}</p>
+          <small>Margem projetada: {currencyBRL(margin)}</small>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MonthlyProjectionPanel({
+  year,
+  yearlyProjection,
+  projectionMaxMagnitude,
+  negativeProjectionCount
+}: {
+  year: string;
+  yearlyProjection: ProjectionMonthView[];
+  projectionMaxMagnitude: number;
+  negativeProjectionCount: number;
+}) {
+  return (
+    <section className="panel dashboard-breakdown-panel dashboard-projection-panel">
+      <div className="section-heading compact-heading">
+        <div>
+          <h2>Projeção mensal de {year}</h2>
+          <p>Ver entradas, saídas, resultado e saldo ao fechar.</p>
+        </div>
+
+        <span className={`badge ${negativeProjectionCount ? "badge-alert" : ""}`}>
+          {negativeProjectionCount ? `${negativeProjectionCount} em vermelho` : "Sem meses em vermelho"}
+        </span>
+      </div>
+
+      <div className="dashboard-projection-bars" aria-label="Resultado projetado por mês">
+        {yearlyProjection.map((item) => {
+          const barHeight = Math.max(16, Math.round((Math.abs(item.projectedResult) / projectionMaxMagnitude) * 100));
+
+          return (
+            <div className="projection-bar-item" key={item.month} title={projectionTooltip(item)}>
+              <div className="projection-bar-track">
+                <span
+                  className={`projection-bar-fill ${item.isNegative ? "is-negative" : "is-positive"} ${item.isSelected ? "is-selected" : ""}`}
+                  style={{ height: `${barHeight}%` }}
+                />
+              </div>
+              <small>{item.shortLabel}</small>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="dashboard-month-calendar compact-calendar">
+        {yearlyProjection.map((item) => (
+          <article
+            className={`dashboard-month-tile ${item.isNegative ? "is-negative" : "is-positive"} ${item.isSelected ? "is-selected" : ""}`}
+            key={item.month}
+            title={projectionTooltip(item)}
+          >
+            <div className="dashboard-month-tile-head">
+              <strong>{item.shortLabel}</strong>
+              <span>{item.isSelected ? "Atual" : "Proj."}</span>
+            </div>
+            <b>{currencyBRL(item.projectedResult)}</b>
+
+            <div className="dashboard-month-tooltip" role="tooltip">
+              <strong>{monthLabel(item.month)}</strong>
+              <div><span>Entradas</span><b>{currencyBRL(item.projectedEntries)}</b></div>
+              <div><span>Saídas</span><b>{currencyBRL(item.projectedOutgoing)}</b></div>
+              <div><span>Resultado</span><b>{currencyBRL(item.projectedResult)}</b></div>
+              <div><span>Saldo ao fechar</span><b>{currencyBRL(item.projectedClosingBalance)}</b></div>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+
+type ProjectDashboardProject = {
+  id: string;
+  name?: string | null;
+  status?: string | null;
+  target_amount?: number | string | null;
+  current_amount?: number | string | null;
+  is_deleted?: boolean | null;
+};
+
+type ProjectDashboardItem = {
+  id: string;
+  project_id: string;
+  name?: string | null;
+  status?: string | null;
+  amount?: number | string | null;
+  is_deleted?: boolean | null;
+  metadata?: unknown;
+};
+
+type ProjectDashboardMovement = {
+  id: string;
+  project_id: string;
+  type?: string | null;
+  amount?: number | string | null;
+  is_deleted?: boolean | null;
+};
+
+type ProjectDashboardBundle = {
+  projects?: ProjectDashboardProject[];
+  items?: ProjectDashboardItem[];
+  movements?: ProjectDashboardMovement[];
+};
+
+function projectDashboardMoney(value: number | string | null | undefined) {
+  const parsed = Number(value || 0);
+
+  return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : 0;
+}
+
+function projectMovementDelta(movement: ProjectDashboardMovement) {
+  const amount = Math.abs(projectDashboardMoney(movement.amount));
+
+  if (movement.type === "remove") return -amount;
+  if (movement.type === "adjust") return projectDashboardMoney(movement.amount);
+
+  return amount;
+}
+
+function projectItemCategory(item: ProjectDashboardItem) {
+  const metadata = item.metadata && typeof item.metadata === "object" && !Array.isArray(item.metadata)
+    ? item.metadata as Record<string, unknown>
+    : {};
+  const category = typeof metadata.category === "string" && metadata.category.trim()
+    ? metadata.category.trim()
+    : "Sem categoria";
+
+  return category;
+}
+
+function activeDashboardProjects(projects: ProjectDashboardProject[]) {
+  return projects.filter((project) => {
+    const status = String(project.status || "active").toLowerCase();
+    const metadata = project && typeof (project as any).metadata === "object" && !Array.isArray((project as any).metadata)
+      ? ((project as any).metadata as Record<string, unknown>)
+      : {};
+    const deletedByMetadata = metadata.deleted === true || metadata.is_deleted === true || Boolean(metadata.deleted_at);
+
+    return !project.is_deleted && !deletedByMetadata && !["archived", "canceled", "deleted", "excluded", "excluido", "excluído"].includes(status);
+  });
+}
+
+function getProjectCash(project: ProjectDashboardProject, movements: ProjectDashboardMovement[]) {
+  const movementTotal = movements
+    .filter((movement) => !movement.is_deleted && movement.project_id === project.id)
+    .reduce((sum, movement) => sum + projectMovementDelta(movement), 0);
+
+  return projectDashboardMoney(movementTotal || project.current_amount || 0);
+}
+
+function buildDashboardProjectInsights(input: {
+  projects: ProjectDashboardProject[];
+  items: ProjectDashboardItem[];
+  movements: ProjectDashboardMovement[];
+}) {
+  const projects = activeDashboardProjects(input.projects);
+  const items = input.items.filter((item) => !item.is_deleted && item.status !== "canceled");
+  const movements = input.movements.filter((movement) => !movement.is_deleted);
+  const totalCash = projects.reduce((sum, project) => sum + getProjectCash(project, movements), 0);
+  const pendingItems = items.filter((item) => item.status !== "completed");
+  const completedItems = items.filter((item) => item.status === "completed");
+  const pendingValue = pendingItems.reduce((sum, item) => sum + projectDashboardMoney(item.amount), 0);
+  const completedValue = completedItems.reduce((sum, item) => sum + projectDashboardMoney(item.amount), 0);
+  const plannedValue = items.reduce((sum, item) => sum + projectDashboardMoney(item.amount), 0);
+  const targetValue = projects.reduce((sum, project) => sum + projectDashboardMoney(project.target_amount), 0);
+  const negativeProjects = projects.filter((project) => getProjectCash(project, movements) < 0);
+  const executionRate = items.length ? (completedItems.length / items.length) * 100 : 0;
+  const valueExecutionRate = plannedValue > 0 ? (completedValue / plannedValue) * 100 : 0;
+  const uncoveredPending = Math.max(pendingValue - totalCash, 0);
+
+  const projectsWithStats = projects.map((project) => {
+    const projectItems = items.filter((item) => item.project_id === project.id);
+    const projectPending = projectItems
+      .filter((item) => item.status !== "completed")
+      .reduce((sum, item) => sum + projectDashboardMoney(item.amount), 0);
+    const projectCompleted = projectItems
+      .filter((item) => item.status === "completed")
+      .reduce((sum, item) => sum + projectDashboardMoney(item.amount), 0);
+    const cash = getProjectCash(project, movements);
+    const target = projectDashboardMoney(project.target_amount);
+    const uncovered = Math.max(projectPending - cash, 0);
+    const itemRate = projectItems.length
+      ? (projectItems.filter((item) => item.status === "completed").length / projectItems.length) * 100
+      : 0;
+
+    return {
+      id: project.id,
+      name: project.name || "Projeto",
+      cash,
+      target,
+      pending: projectPending,
+      completed: projectCompleted,
+      uncovered,
+      itemRate
+    };
+  });
+
+  const priorityProjects = projectsWithStats
+    .sort((left, right) => {
+      if (left.cash < 0 && right.cash >= 0) return -1;
+      if (right.cash < 0 && left.cash >= 0) return 1;
+      return right.uncovered - left.uncovered;
+    })
+    .slice(0, 5);
+
+  const categoryMap = new Map<string, { label: string; pending: number; completed: number; total: number }>();
+
+  for (const item of items) {
+    const category = projectItemCategory(item);
+    const current = categoryMap.get(category) || { label: category, pending: 0, completed: 0, total: 0 };
+    const amount = projectDashboardMoney(item.amount);
+
+    current.total += amount;
+
+    if (item.status === "completed") current.completed += amount;
+    else current.pending += amount;
+
+    categoryMap.set(category, current);
+  }
+
+  const categories = Array.from(categoryMap.values())
+    .sort((left, right) => right.total - left.total)
+    .slice(0, 5);
+
+  return {
+    projects,
+    items,
+    movements,
+    totalCash: projectDashboardMoney(totalCash),
+    pendingValue: projectDashboardMoney(pendingValue),
+    completedValue: projectDashboardMoney(completedValue),
+    plannedValue: projectDashboardMoney(plannedValue),
+    targetValue: projectDashboardMoney(targetValue),
+    negativeProjectsCount: negativeProjects.length,
+    pendingItemsCount: pendingItems.length,
+    completedItemsCount: completedItems.length,
+    executionRate,
+    valueExecutionRate,
+    uncoveredPending: projectDashboardMoney(uncoveredPending),
+    priorityProjects,
+    categories
+  };
+}
+
+export function DashboardClient({ snapshot }: DashboardClientProps) {
+  const [month, setMonth] = useState(monthInput());
+  const [referenceDate, setReferenceDate] = useState(todayInput());
+
+  const summary = useMemo(() => buildDashboardReferenceSummary(snapshot, month, referenceDate), [snapshot, month, referenceDate]);
+
+  
+  const [projectBundle, setProjectBundle] = useState<ProjectDashboardBundle | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+
+    fetch("/api/projects", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => {
+        if (!mounted || !payload) return;
+
+        setProjectBundle({
+          projects: payload.projects || [],
+          items: payload.items || [],
+          movements: payload.movements || []
+        });
+      })
+      .catch(() => {
+        if (mounted) setProjectBundle(null);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const projectInsights = useMemo(() => {
+    const snapshotWithItems = snapshot as FinancialSnapshotInput & { projectItems?: ProjectDashboardItem[] };
+
+    return buildDashboardProjectInsights({
+      projects: projectBundle?.projects?.length
+        ? projectBundle.projects
+        : ((snapshot.projects || []) as ProjectDashboardProject[]),
+      items: projectBundle?.items?.length
+        ? projectBundle.items
+        : ((snapshotWithItems.projectItems || []) as ProjectDashboardItem[]),
+      movements: projectBundle?.movements?.length
+        ? projectBundle.movements
+        : ((snapshot.projectMovements || []) as ProjectDashboardMovement[])
+    });
+  }, [projectBundle, snapshot]);
+
+const yearlyProjection = useMemo(() => {
+    return remainingMonthsOfYear(month).map((projectionMonth) => {
+      const monthSummary = buildDashboardReferenceSummary(snapshot, projectionMonth, monthEnd(projectionMonth));
+      const projectedEntries = monthSummary.income + monthSummary.plannedIncoming;
+      const projectedOutgoing = monthSummary.cashOut + monthSummary.plannedOutgoing;
+      const projectedResult = projectedEntries - projectedOutgoing;
+      const projectedClosingBalance = monthSummary.projectedMonthEndBalance;
+      const isNegative = projectedClosingBalance < 0 || projectedResult < 0;
+
+      return {
+        month: projectionMonth,
+        shortLabel: monthShortLabel(projectionMonth),
+        projectedEntries,
+        projectedOutgoing,
+        projectedResult,
+        projectedClosingBalance,
+        isNegative,
+        isSelected: projectionMonth === month
+      } satisfies ProjectionMonthView;
+    });
+  }, [month, snapshot]);
+
+  const projectionMaxMagnitude = useMemo(() => {
+    const magnitude = yearlyProjection.reduce((maxValue, item) => Math.max(maxValue, Math.abs(item.projectedResult)), 0);
+    return magnitude > 0 ? magnitude : 1;
+  }, [yearlyProjection]);
+
+  const distributionItems: DistributionItem[] = [
+    { label: "Entradas", value: summary.income + summary.plannedIncoming, helper: "Recebidas + planejadas", tone: "income" },
+    { label: "Saídas", value: summary.cashOut + summary.plannedOutgoing, helper: "Pagas + planejadas", tone: "expense" },
+    { label: "Cartão", value: summary.cardExpenses, helper: "Por competência", tone: "card" },
+    { label: "Faturas", value: summary.openCardInvoices, helper: "Em aberto", tone: "neutral" }
+  ];
+
+  const negativeProjectionCount = yearlyProjection.filter((item) => item.isNegative).length;
+  const expenseRatio = summary.income > 0 ? (summary.expenses / summary.income) * 100 : 0;
+  const positiveNet = summary.net >= 0;
+  const projectedMargin = summary.projectedMonthEndBalance - summary.openCardInvoices;
+  const healthBase = Math.max(Math.abs(summary.income), Math.abs(summary.cashOut), Math.abs(summary.openCardInvoices), 1);
+  const healthScore = clampPercent(50 + (projectedMargin / healthBase) * 50);
+  const healthTitle = healthScore < 35 ? "Atenção alta" : healthScore < 65 ? "Margem moderada" : "Margem saudável";
+  const healthHelper =
+    healthScore < 35
+      ? "O saldo projetado fica pressionado depois de considerar faturas abertas."
+      : healthScore < 65
+        ? "Existe margem, mas novas compras devem respeitar vencimentos e prioridades."
+        : "O mês parece confortável com os dados atuais, mantendo atenção às próximas faturas.";
+
+  function useMonthEnd() {
+    setReferenceDate(monthEnd(month));
+  }
+
+  function useToday() {
+    const today = todayInput();
+    setReferenceDate(today);
+    setMonth(today.slice(0, 7));
+  }
+
+  return (
+    <div className="grid dashboard-page">
+      <header className="page-header">
+        <div>
+          <h1 className="page-title">Dashboard</h1>
+          <p className="page-caption">Visão consolidada das contas, faturas, parcelas, metas, projetos e investimentos.</p>
+        </div>
+
+        <div className="dashboard-reference-controls">
+          <label className="inline-field">Mês<input type="month" value={month} onChange={(event) => setMonth(event.target.value)} /></label>
+          <label className="inline-field">Analisar até<input type="date" value={referenceDate} onChange={(event) => setReferenceDate(event.target.value)} /></label>
+          <button className="btn btn-muted" type="button" onClick={useMonthEnd}>Fechamento do mês</button>
+          <button className="btn btn-primary" type="button" onClick={useToday}>Hoje</button>
+        </div>
+      </header>
+
+      {summary.warnings.length ? (
+        <section className="dashboard-warning-panel">
+          <strong>Atenção ao caixa</strong>
+          <div>{summary.warnings.map((warning) => <span key={warning}>{warning}</span>)}</div>
+        </section>
+      ) : null}
+
+      <section className="stats-grid dashboard-stats-grid">
+        <StatCard label="Saldo em contas" value={currencyBRL(summary.totalAccountBalance)} helper="Saldo derivado pelas transações até a data de referência." />
+        <StatCard label="Resultado de caixa" value={currencyBRL(summary.cashNet)} helper={positiveNet ? "Entradas maiores que saídas de caixa até agora." : "Saídas de caixa maiores que entradas até agora."} />
+        <StatCard label="Faturas abertas" value={currencyBRL(summary.openCardInvoices)} helper="Valor em aberto por fatura, já descontando pagamentos parciais." />
+        <StatCard label="Saldo projetado" value={currencyBRL(summary.projectedMonthEndBalance)} helper="Contas atuais + entradas planejadas - saídas planejadas." />
+      </section>
+
+      <section className="dashboard-flow-grid dashboard-flow-grid-compact">
+        <div className="panel dashboard-flow-panel">
+          <div className="section-heading compact-heading">
+            <div>
+              <h2>Fluxo de {monthLabel(month)}</h2>
+              <p>Base diária em {datePt(referenceDate)}.</p>
+            </div>
+            <span className="badge">{positiveNet ? "Superávit" : "Déficit"}</span>
+          </div>
+
+          <div className="flow-split-grid compact-split-grid">
+            <SplitPanel label="Receitas" value={currencyBRL(summary.income)} helper="Tudo que entrou até a data escolhida." tone="income" />
+            <SplitPanel label="Saídas de caixa" value={currencyBRL(summary.cashOut)} helper="Despesas pagas e pagamentos de fatura." tone="expense" />
+          </div>
+
+          <div className="flow-vertical-track" aria-label="Uso das receitas por despesas">
+            <span style={{ width: `${clampPercent(expenseRatio)}%` }} />
+          </div>
+          <p className="muted-line">As saídas representam {percent(expenseRatio)} das receitas registradas até a referência.</p>
+
+          <div className="dashboard-flow-details-grid">
+            <article className="dashboard-flow-detail-card">
+              <span>Resultado do mês</span>
+              <strong className={summary.cashNet < 0 ? "danger-text" : "positive-text"}>
+                {currencyBRL(summary.cashNet)}
+              </strong>
+            </article>
+
+            <article className="dashboard-flow-detail-card">
+              <span>Entradas previstas</span>
+              <strong>{currencyBRL(summary.plannedIncoming)}</strong>
+            </article>
+
+            <article className="dashboard-flow-detail-card">
+              <span>Saídas previstas</span>
+              <strong>{currencyBRL(summary.plannedOutgoing)}</strong>
+            </article>
+
+            <article className="dashboard-flow-detail-card">
+              <span>Cartão no mês</span>
+              <strong>{currencyBRL(summary.cardExpenses)}</strong>
+            </article>
+          </div>
+        </div>
+
+        <MonthlyProjectionPanel
+          year={month.slice(0, 4)}
+          yearlyProjection={yearlyProjection}
+          projectionMaxMagnitude={projectionMaxMagnitude}
+          negativeProjectionCount={negativeProjectionCount}
+        />
+      </section>
+
+      <section className="dashboard-analytics-grid">
+        <DistributionPanel items={distributionItems} />
+        <HealthPanel score={healthScore} title={healthTitle} helper={healthHelper} margin={projectedMargin} />
+
+        <section className="panel dashboard-chart-card dashboard-next-panel">
+          <div className="section-heading compact-heading">
+            <div>
+              <h2>Próximas parcelas</h2>
+              <p>Parcelas pendentes e antecipáveis.</p>
+            </div>
+          </div>
+
+          <div className="dashboard-mini-list compact-list">
+            {summary.upcomingInstallments.length ? (
+              summary.upcomingInstallments.slice(0, 5).map((installment) => (
+                <div className="dashboard-mini-row" key={installment.id}>
+                  <div>
+                    <strong>{installment.description}</strong>
+                    <span>{installment.installment_number}/{installment.installments_count} • {datePt(installment.due_date)}</span>
+                  </div>
+                  <b>{currencyBRL(installment.amount)}</b>
+                </div>
+              ))
+            ) : (
+              <p className="empty-state">Nenhuma parcela pendente encontrada.</p>
+            )}
+          </div>
+        </section>
+      </section>
+
+      
+      <section className="panel dashboard-projects-panel">
+        <div className="section-heading compact-heading">
+          <div>
+            <h2>Projetos</h2>
+            <p>Caixa interno, itens pendentes e risco financeiro dos projetos.</p>
+          </div>
+
+          <span className={`badge ${projectInsights.negativeProjectsCount ? "badge-alert" : ""}`}>
+            {projectInsights.negativeProjectsCount
+              ? `${projectInsights.negativeProjectsCount} negativo(s)`
+              : "Sem projetos negativos"}
+          </span>
+        </div>
+
+        <div className="dashboard-project-kpis">
+          <article>
+            <span>Caixa em projetos</span>
+            <strong className={projectInsights.totalCash < 0 ? "danger-text" : ""}>
+              {currencyBRL(projectInsights.totalCash)}
+            </strong>
+            <small>Saldo interno somando aportes, retiradas e itens concluídos.</small>
+          </article>
+
+          <article>
+            <span>Comprometido pendente</span>
+            <strong>{currencyBRL(projectInsights.pendingValue)}</strong>
+            <small>{projectInsights.pendingItemsCount} item(ns) ainda pendente(s).</small>
+          </article>
+
+          <article>
+            <span>Itens concluídos</span>
+            <strong>{percent(projectInsights.executionRate)}</strong>
+            <small>
+              {projectInsights.completedItemsCount} concluído(s) de {projectInsights.items.length}.
+            </small>
+          </article>
+
+          <article>
+            <span>Falta cobrir</span>
+            <strong className={projectInsights.uncoveredPending > 0 ? "danger-text" : "positive-text"}>
+              {currencyBRL(projectInsights.uncoveredPending)}
+            </strong>
+            <small>Diferença entre caixa atual e itens pendentes.</small>
+          </article>
+        </div>
+
+        <div className="dashboard-projects-grid">
+          <section className="dashboard-project-priority">
+            <div className="dashboard-card-heading">
+              <strong>Prioridade por projeto</strong>
+              <span>Negativos e sem cobertura primeiro</span>
+            </div>
+
+            {projectInsights.priorityProjects.length ? (
+              <div className="dashboard-project-priority-list">
+                {projectInsights.priorityProjects.map((project) => {
+                  const coverage = project.pending > 0 ? Math.max(0, Math.min(100, (project.cash / project.pending) * 100)) : 100;
+
+                  return (
+                    <article className={`dashboard-project-priority-item ${project.cash < 0 || project.uncovered > 0 ? "is-risk" : ""}`} key={project.id}>
+                      <div>
+                        <strong>{project.name}</strong>
+                        <small>
+                          Caixa {currencyBRL(project.cash)} • Pendente {currencyBRL(project.pending)}
+                        </small>
+                      </div>
+
+                      <b>{project.uncovered > 0 ? currencyBRL(project.uncovered) : "Coberto"}</b>
+
+                      <span className="dashboard-project-coverage-track">
+                        <i style={{ width: `${coverage}%` }} />
+                      </span>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="empty-state">Nenhum projeto ativo para acompanhar.</div>
+            )}
+          </section>
+
+          <section className="dashboard-project-category">
+            <div className="dashboard-card-heading">
+              <strong>Itens por categoria</strong>
+              <span>Concluídos e pendentes</span>
+            </div>
+
+            {projectInsights.categories.length ? (
+              <div className="dashboard-project-category-list">
+                {projectInsights.categories.map((category) => {
+                  const completedWidth = category.total > 0 ? Math.max(0, Math.min(100, (category.completed / category.total) * 100)) : 0;
+
+                  return (
+                    <article className="dashboard-project-category-item" key={category.label}>
+                      <div>
+                        <strong>{category.label}</strong>
+                        <small>
+                          {currencyBRL(category.completed)} concluído • {currencyBRL(category.pending)} pendente
+                        </small>
+                      </div>
+
+                      <b>{currencyBRL(category.total)}</b>
+
+                      <span className="dashboard-project-category-track">
+                        <i style={{ width: `${completedWidth}%` }} />
+                      </span>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="empty-state">Nenhum item de projeto categorizado.</div>
+            )}
+          </section>
+        </div>
+      </section>
+
+      <section className="stats-grid dashboard-goals-grid">
+        <StatCard label="Metas em andamento" value={percent(summary.goalsProgressAverage)} helper={`Faltam ${currencyBRL(summary.goalsMissingAmount)} para concluir.`} />
+        <StatCard label="Caixa em projetos" value={currencyBRL(summary.projectsCash)} helper={`Faltam ${currencyBRL(summary.projectsMissingAmount)} para os projetos.`} />
+        <StatCard label="Investimentos" value={currencyBRL(summary.investmentsCurrentValue)} helper={`Caixa em corretoras: ${currencyBRL(summary.investmentsCash)}.`} />
+      </section>
+
+      <section className="panel">
+        <div className="section-heading compact-heading">
+          <div>
+            <h2>Movimentações recentes</h2>
+            <p>Últimos registros da competência selecionada.</p>
+          </div>
+        </div>
+
+        {summary.recentTransactions.length ? (
+          <div className="table-scroll">
+            <table className="table">
+              <thead><tr><th>Data</th><th>Descrição</th><th>Tipo</th><th>Valor</th></tr></thead>
+              <tbody>
+                {summary.recentTransactions.map((transaction) => (
+                  <tr key={transaction.id}>
+                    <td>{datePt(transaction.date)}</td>
+                    <td>{transaction.description}</td>
+                    <td>{labelTransactionType(transaction.type)}</td>
+                    <td>{currencyBRL(transaction.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="empty-state">Nenhuma movimentação encontrada para o mês e data selecionados.</div>
+        )}
+      </section>
+    </div>
+  );
+}
