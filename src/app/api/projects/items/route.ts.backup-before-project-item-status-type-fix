@@ -247,7 +247,7 @@ export async function PATCH(request: Request) {
 
     const itemAmount = money(payload.amount);
     const previousStatus = String(existing.status || "pending");
-    const nextStatus: "pending" | "completed" | "canceled" = payload.status;
+    const nextStatus = payload.status;
 
     if (nextStatus === "completed") {
       const validation = await ensureCanCompleteItem({
@@ -305,7 +305,7 @@ export async function PATCH(request: Request) {
         category: payload.category || null,
         allowNegative: payload.allow_negative
       });
-    } else if (previousStatus === "completed") {
+    } else if (previousStatus === "completed" && nextStatus !== "completed") {
       linkedMovement = await softDeleteCompletionMovement(context.supabase, access.ownerId, payload.project_id, payload.id);
     }
 
